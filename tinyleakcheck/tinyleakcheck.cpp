@@ -16,6 +16,7 @@
 #endif
 
 #include <mutex>
+#include <sstream>
 #include <vector>
 
 #if defined __GNUC__ && !defined __clang__
@@ -168,7 +169,9 @@ void StackFrame::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const no
 	#endif
 }
 
-StackTrace::StackTrace() noexcept {
+StackTrace::StackTrace() noexcept :
+	thread_id(std::this_thread::get_id())
+{
 	auto create = [this]() noexcept -> void {
 		#ifdef TINYLEAKCHECK_ENABLED
 		/*
@@ -381,7 +384,7 @@ void StackTrace::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const no
 }
 
 MemoryTracer::BlockInfo::BlockInfo( void* ptr, size_t alignment,size_t size, bool with_stacktrace ) noexcept :
-	ptr(ptr), alignment(alignment),size(size)
+	ptr(ptr), alignment(alignment),size(size), thread_id(std::this_thread::get_id())
 {
 	if (with_stacktrace) [[likely]] {
 		trace = new StackTrace;
@@ -400,12 +403,20 @@ MemoryTracer::BlockInfo::BlockInfo( void* ptr, size_t alignment,size_t size, boo
 }
 void MemoryTracer::BlockInfo::basic_print(FILE* file/*=stderr*/,size_t indent/*=2*/) const noexcept {
 	for (size_t i=0;i<indent;++i) fputc(' ',file);
-	fprintf(stderr,"Leak at %p (align %zu, size %zu)",ptr,alignment,size);
+	fputs("Leaked ",file);
+	#ifdef _WIN32
+	fprintf(file,"0x%p",ptr);
+	#else
+	fprintf(file,"%p"  ,ptr);
+	#endif
+	std::stringstream ss; ss<<thread_id; std::string thread_id_str=ss.str();
+	fprintf(file," ( align %zu, size %zu, thread %s )",alignment,size,thread_id_str.c_str());
+
 	if (trace!=nullptr) [[likely]] {
-		fprintf(stderr," allocated at:\n");
-		trace->basic_print();
+		fprintf(file," allocated at:\n");
+		trace->basic_print(file,indent+2);
 	} else {
-		fprintf(stderr,"\n");
+		fprintf(file,"\n");
 	}
 }
 

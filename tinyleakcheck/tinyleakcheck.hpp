@@ -97,6 +97,7 @@ User can `#define` any of the following to configure:
 #include <deque>
 #include <map>
 #include <string>
+#include <thread>
 
 namespace TinyLeakCheck {
 
@@ -134,6 +135,7 @@ struct StackFrame final {
 //Describes a stack trace.  User does not need directly, but is exposed to the user.  Constructing
 //	this class anywhere builds a stack trace to that location, which the user may find handy!
 struct StackTrace final {
+	std::thread::id thread_id;
 	std::deque<StackFrame> frames;
 	StackTrace() noexcept;
 	void pop(size_t count=1) noexcept { for (size_t k=0;k<count;++k) frames.pop_front(); } //pop `count` number of stack frames
@@ -165,6 +167,7 @@ struct MemoryTracer final {
 		public:
 			void* ptr;
 			size_t alignment, size;
+			std::thread::id thread_id;
 			StackTrace* trace;
 		private:
 			BlockInfo( void* ptr, size_t alignment,size_t size, bool with_stacktrace ) noexcept;
