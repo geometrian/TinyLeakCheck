@@ -500,40 +500,22 @@ void prevent_linker_elison() {}
 
 #ifdef TINYLEAKCHECK_ENABLED
 
-[[nodiscard]] void* operator new  ( std::size_t size                             ) {
+[[nodiscard]] void* operator new( std::size_t size                             ) {
 	void* result = TinyLeakCheck::aligned_alloc( __STDCPP_DEFAULT_NEW_ALIGNMENT__, size );
 	TinyLeakCheck::memory_tracer.record_alloc(result,__STDCPP_DEFAULT_NEW_ALIGNMENT__,size);
 	return result;
 }
-[[nodiscard]] void* operator new[]( std::size_t size                             ) {
-	void* result = TinyLeakCheck::aligned_alloc( __STDCPP_DEFAULT_NEW_ALIGNMENT__, size );
-	TinyLeakCheck::memory_tracer.record_alloc(result,__STDCPP_DEFAULT_NEW_ALIGNMENT__,size);
-	return result;
-}
-[[nodiscard]] void* operator new  ( std::size_t size, std::align_val_t alignment ) {
-	void* result = TinyLeakCheck::aligned_alloc( static_cast<size_t>(alignment), size );
-	TinyLeakCheck::memory_tracer.record_alloc(result,static_cast<size_t>(alignment),size);
-	return result;
-}
-[[nodiscard]] void* operator new[]( std::size_t size, std::align_val_t alignment ) {
+[[nodiscard]] void* operator new( std::size_t size, std::align_val_t alignment ) {
 	void* result = TinyLeakCheck::aligned_alloc( static_cast<size_t>(alignment), size );
 	TinyLeakCheck::memory_tracer.record_alloc(result,static_cast<size_t>(alignment),size);
 	return result;
 }
 
-void operator delete  ( void* ptr                             ) noexcept {
+void operator delete( void* ptr                             ) noexcept {
 	TinyLeakCheck::memory_tracer.record_dealloc(ptr,__STDCPP_DEFAULT_NEW_ALIGNMENT__);
 	TinyLeakCheck::aligned_free(ptr);
 }
-void operator delete[]( void* ptr                             ) noexcept {
-	TinyLeakCheck::memory_tracer.record_dealloc(ptr,__STDCPP_DEFAULT_NEW_ALIGNMENT__);
-	TinyLeakCheck::aligned_free(ptr);
-}
-void operator delete  ( void* ptr, std::align_val_t alignment ) noexcept {
-	TinyLeakCheck::memory_tracer.record_dealloc(ptr,static_cast<size_t>(alignment));
-	TinyLeakCheck::aligned_free(ptr);
-}
-void operator delete[]( void* ptr, std::align_val_t alignment ) noexcept {
+void operator delete( void* ptr, std::align_val_t alignment ) noexcept {
 	TinyLeakCheck::memory_tracer.record_dealloc(ptr,static_cast<size_t>(alignment));
 	TinyLeakCheck::aligned_free(ptr);
 }
