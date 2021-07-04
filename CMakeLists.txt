@@ -14,6 +14,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_CONFIGURATION_TYPES "Debug;RelWithDebInfo" CACHE STRING "" FORCE)
 
+if(UNIX)
+	set(THREADLIB "pthread")
+endif()
+
 add_library(TinyLeakCheck
 	"tinyleakcheck/tiniestleakcheck.hpp"
 	"tinyleakcheck/tinyleakcheck.hpp"
@@ -22,8 +26,16 @@ add_library(TinyLeakCheck
 set_target_properties(TinyLeakCheck PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(TinyLeakCheck PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(example "example/main.cpp")
-set_target_properties(example PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(example TinyLeakCheck)
+add_executable(example_leaks "examples/leaks.cpp")
+set_target_properties(example_leaks PROPERTIES LINKER_LANGUAGE CXX)
+target_link_libraries(example_leaks TinyLeakCheck)
 
-set_property( DIRECTORY PROPERTY VS_STARTUP_PROJECT example )
+add_executable(example_stack_trace "examples/stack_trace.cpp")
+set_target_properties(example_stack_trace PROPERTIES LINKER_LANGUAGE CXX)
+target_link_libraries(example_stack_trace TinyLeakCheck)
+
+add_executable(example_threads "examples/threads.cpp")
+set_target_properties(example_threads PROPERTIES LINKER_LANGUAGE CXX)
+target_link_libraries(example_threads TinyLeakCheck "${THREADLIB}")
+
+set_property( DIRECTORY PROPERTY VS_STARTUP_PROJECT example_leaks )

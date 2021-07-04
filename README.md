@@ -2,7 +2,7 @@
 
 TinyLeakCheck is a tiny, standalone memory tracer and leak checker.
 
-For example, the following code (a simplified version of [the bundled example](example/main.cpp)):
+For example, the following code (a simplified version of [a bundled example](examples/leaks.cpp)):
 ```cpp
 #include <tinyleakcheck/tinyleakcheck.hpp>
 std::string str; //Static leak
@@ -38,7 +38,9 @@ Any detected errors are reported immediately.  By default, the checker is only e
 An example comes with the project; you can build it with standard CMake.  Something like:
 ```sh
 mkdir build && (cd build && cmake .. -DCMAKE_BUILD_TYPE=Debug && make)
-./build/example
+./build/example_leaks
+./build/example_stack_trace
+./build/example_threads
 ```
 
 ## Advanced Usage
