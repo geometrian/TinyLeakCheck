@@ -420,6 +420,9 @@ void MemoryTracer::BlockInfo::basic_print(FILE* file/*=stderr*/,size_t indent/*=
 	}
 }
 
+#ifdef TINYLEAKCHECK_ENABLED
+static std::recursive_mutex _memory_tracer_mutex;
+#endif
 inline static void _default_callback_print_block(MemoryTracer const& /*memory_tracer*/,MemoryTracer::BlockInfo const& block) {
 	if (block.trace!=nullptr) {
 		for (StackFrame& frame : block.trace->frames) {
@@ -461,10 +464,15 @@ MemoryTracer::MemoryTracer() {
 }
 MemoryTracer::~MemoryTracer() {
 	if (blocks!=nullptr) [[unlikely]] {
+		//Just to ensure the printing order is nice
+		std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
+
 		callbacks.leaks_detected(*this);
 	}
 }
 void MemoryTracer::record_alloc  (void* ptr,size_t alignment,size_t size) {
+	std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
+
 	if (mode.record.peek()) {
 		mode.record.push(false);
 
@@ -481,6 +489,8 @@ void MemoryTracer::record_alloc  (void* ptr,size_t alignment,size_t size) {
 }
 void MemoryTracer::record_dealloc(void* ptr,size_t alignment            ) {
 	if (ptr==nullptr) return;
+
+	std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
 
 	TINYLEAKCHECK_ASSERT(blocks!=nullptr,"Extra free!");
 	if (mode.record.peek()) {
@@ -502,7 +512,7 @@ void MemoryTracer::record_dealloc(void* ptr,size_t alignment            ) {
 }
 
 #ifdef TINYLEAKCHECK_ENABLED
-thread_local MemoryTracer memory_tracer;
+MemoryTracer memory_tracer;
 #endif
 
 void prevent_linker_elison() {}

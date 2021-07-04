@@ -86,6 +86,7 @@ Ideas:
 - Also in my personal library, padding out the function names in the trace so they're the same width would improve readability.
 - On a related note, optional support for `#include <format>` or [libfmt](https://fmt.dev) would be great!
 - Memory blocks are reported in no particular order because they are recorded in a `std::map<...>`.  It would be ideal to output them in-order.  Note that the datastructure to accomplish this ought to retain the asymptotic efficiency of the map, but also allow deallocations of blocks to happen at any time.  Probably a map and linked list combo would work.
+- There is only one tracer for the whole program; it would be better to have a separate tracer for each thread to reduce contention, as was originally conceived.
 - TinyLeakCheck is unfortunately not very well tested yet.  Bug reports are welcome!
 
 Bug reports can be opened in the issue tracker.  Code contributions are welcome, but please follow the style that already exists.

@@ -207,7 +207,7 @@ struct MemoryTracer final {
 
 //Per-thread memory tracer.  User does not need, but is exposed to the user.
 #ifdef TINYLEAKCHECK_ENABLED
-extern thread_local MemoryTracer memory_tracer;
+extern MemoryTracer memory_tracer;
 #endif
 
 //User needs to call in order to prevent the linker from eliding this module.  See also:
