@@ -1,4 +1,4 @@
-#ifdef _WIN32
+#if defined _WIN32 && !defined _CRT_SECURE_NO_WARNINGS
 	//No, Microsoft :P  The standard library is *not* "deprecated" . . .
 	#define _CRT_SECURE_NO_WARNINGS
 #endif
