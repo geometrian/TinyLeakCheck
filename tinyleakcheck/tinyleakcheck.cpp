@@ -107,6 +107,9 @@ static void str_replace( std::string* str_input, std::string_view const& str_to_
 [[nodiscard]] inline static std::string str_get_replaced( std::string const& str_input, std::string_view const& str_to_find,std::string_view const& str_to_replace_with ) {
 	std::string tmp=str_input; str_replace( &tmp, str_to_find,str_to_replace_with ); return tmp;
 }
+[[nodiscard]] inline static bool str_contains(std::string const& str,std::string const& other) noexcept {
+	return str.find(other) != std::string::npos;
+}
 
 #ifdef _WIN32
 struct MutexWrapper final {
@@ -118,6 +121,13 @@ std::atomic_bool MutexWrapper::ready = false;
 MutexWrapper _stacktrace_mutex;
 #endif
 
+bool StackFrame::matches_func(std::string const& funcname) const noexcept {
+	#ifdef _WIN32
+		return str_contains(name               ,funcname);
+	#else
+		return str_contains(function_identifier,funcname);
+	#endif
+}
 void StackFrame::prettify_strings() {
 	#ifdef TINYLEAKCHECK_ENABLED
 	memory_tracer->mode.record.push(false);
@@ -483,11 +493,6 @@ void MemoryTracer::BlockInfo::basic_print(FILE* file/*=stderr*/,size_t indent/*=
 
 static std::recursive_mutex _memory_tracer_mutex;
 inline static void _default_callback_print_block(MemoryTracer const& /*memory_tracer*/,MemoryTracer::BlockInfo const& block) {
-	if (block.trace!=nullptr) {
-		for (StackFrame& frame : block.trace->frames) {
-			frame.prettify_strings();
-		}
-	}
 	block.basic_print();
 }
 inline static void _default_callback_post_alloc (MemoryTracer const& /*memory_tracer*/,void* /*ptr*/,size_t /*alignment*/,size_t /*size*/) {}
@@ -521,7 +526,37 @@ MemoryTracer::MemoryTracer() {
 }
 MemoryTracer::~MemoryTracer() {
 	if (!blocks.empty()) [[unlikely]] {
-		callbacks.leaks_detected(*this);
+		//Prettify strings and process ignores
+		std::string const ignore_funcs[] = TINYLEAKCHECK_IGNORE_FUNCS;
+		for ( auto iter=blocks.begin(); iter!=blocks.end(); ) {
+			BlockInfo* block = iter->second;
+			if (block->trace!=nullptr) {
+				for (StackFrame& frame : block->trace->frames) {
+					frame.prettify_strings();
+
+					for (std::string const& ignore_func : ignore_funcs) {
+						if (frame.matches_func(ignore_func)) [[unlikely]] {
+							delete block;
+							auto iter_old = iter++;
+							blocks.erase(iter_old);
+							goto NEXT_BLOCK;
+						}
+					}
+				}
+			}
+			++iter;
+			NEXT_BLOCK:;
+		}
+
+		//If there are still blocks, then memory leak!
+		if (!blocks.empty()) [[unlikely]] {
+			callbacks.leaks_detected(*this);
+
+			for (auto const& iter : blocks) {
+				delete iter.second;
+			}
+			//blocks.clear();
+		}
 	}
 }
 void MemoryTracer::record_alloc  (void* ptr,size_t alignment,size_t size) {

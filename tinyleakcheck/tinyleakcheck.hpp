@@ -45,6 +45,14 @@ User can `#define` any of the following to configure:
 		have been `#define`d when the "tinyleakcheck.cpp" file is compiled in order to have an
 		effect!  This flag only has an effect on Windows because filenames are only available there.
 
+	#define TINYLEAKCHECK_IGNORE_FUNCS <brace initializer of array of function names>
+		Defines an array of string that, if a leak triggers inside of a function whose name (after
+		prettifying) contains any of them, will not "count" as a leak.  This is also used to handle
+		certain memory allocations within the standard library that are cleaned up after static
+		destruction (such an allocation would be falsely reported as a memory leak).  Note that this
+		should *only* be used for ignoring functions in standard libraries; don't use this instead
+		of fixing your code!
+
 	#define TINYLEAKCHECK_ASSERT <assert>
 		Defines an assertion function for TinyLeakCheck to use internally.  If none is provided, it
 		uses `<cassert>`'s assert.  Note that this must be `#define`d when the "tinyleakcheck.cpp"
@@ -64,6 +72,9 @@ User can `#define` any of the following to configure:
 #ifndef TINYLEAKCHECK_PRETTIFY_ENVS
 	#define TINYLEAKCHECK_PRETTIFY_ENVS\
 		{ "VS2019INSTALLDIR" }
+#endif
+#ifndef TINYLEAKCHECK_IGNORE_STDLIB_FUNCS
+	#define TINYLEAKCHECK_IGNORE_FUNCS { "std::use_facet", "std::_Facet_Register" }
 #endif
 #ifndef TINYLEAKCHECK_ASSERT
 	#include <cassert>
@@ -128,6 +139,7 @@ struct StackFrame final {
 	#else
 		std::string function_identifier;
 	#endif
+	bool matches_func(std::string const& funcname) const noexcept; //check if matches `funcname`.  Note output may change after prettifying!
 	void prettify_strings(); //Replaces strings in `.name` and `.filename` to prettify output.  See discussion of macros above.
 	void basic_print(FILE* file=stderr,size_t indent=4) const noexcept; //Basic print function used by default.
 };

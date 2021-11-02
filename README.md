@@ -86,6 +86,7 @@ No warranty or guarantees are implied.  TinyLeakCheck is open-source and free un
 Ideas:
 
 - More-detailed leak information on non-Windows platforms!
+- Ignores only work when the function name is available (i.e. when a trace is created).  Make a lighter-weight trace that just gets the function name to allow this all the time?  Would be nice to have that feature just anyway.
 - The version of this in my personal library has color output.  This wouldn't actually be too hard to add, at least on Linux or modern Windows, and it makes the traces *much* prettier.
 - Also in my personal library, padding out the function names in the trace so they're the same width would improve readability.
 - On a related note, optional support for `#include <format>` or [libfmt](https://fmt.dev) would be great!
