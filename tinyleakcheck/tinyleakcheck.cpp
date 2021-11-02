@@ -120,7 +120,7 @@ MutexWrapper _stacktrace_mutex;
 
 void StackFrame::prettify_strings() {
 	#ifdef TINYLEAKCHECK_ENABLED
-	memory_tracer.mode.record.push(false);
+	memory_tracer->mode.record.push(false);
 	{
 	#endif
 		struct PrettifyReplacement final {
@@ -150,7 +150,7 @@ void StackFrame::prettify_strings() {
 		#endif
 	#ifdef TINYLEAKCHECK_ENABLED
 	}
-	memory_tracer.mode.record.pop();
+	memory_tracer->mode.record.pop();
 	#endif
 }
 void StackFrame::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const noexcept {
@@ -214,7 +214,7 @@ StackTrace::StackTrace() noexcept :
 		the same time, though, we *are* allocating memory, so we still need to record the
 		allocations so that the tracer won't be confused when this stack trace is later deallocated.
 		*/
-		memory_tracer.mode.with_stacktrace.push(false);
+		memory_tracer->mode.with_stacktrace.push(false);
 		#endif
 
 		#ifdef _WIN32
@@ -390,7 +390,7 @@ StackTrace::StackTrace() noexcept :
 		#endif
 
 		#ifdef TINYLEAKCHECK_ENABLED
-		memory_tracer.mode.with_stacktrace.pop();
+		memory_tracer->mode.with_stacktrace.pop();
 		#endif
 	};
 	#ifdef _WIN32
@@ -442,18 +442,20 @@ void StackTrace::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const no
 	}
 }
 
+#ifdef TINYLEAKCHECK_ENABLED
 MemoryTracer::BlockInfo::BlockInfo( void* ptr, size_t alignment,size_t size, bool with_stacktrace ) noexcept :
 	ptr(ptr), alignment(alignment),size(size), thread_id(std::this_thread::get_id())
 {
 	if (with_stacktrace) [[likely]] {
 		trace = new StackTrace;
 		/*
-		We need to pop three times to get to the call site where the memory was allocated:
+		We need to pop four times to get to the call site where the memory was allocated:
 			BlockInfo::BlockInfo(...)
 			Tracer::record_alloc(...)
+			_alloc(...)
 			operator new(...) / operator new[](...)
 		*/
-		trace->pop(3);
+		trace->pop(4);
 	} else {
 		//Stack trace was not requested.  This massively improves performance and is actually
 		//	necessary e.g. when generating the stack trace itself (we'd get infinite recursion).
@@ -479,9 +481,7 @@ void MemoryTracer::BlockInfo::basic_print(FILE* file/*=stderr*/,size_t indent/*=
 	}
 }
 
-#ifdef TINYLEAKCHECK_ENABLED
 static std::recursive_mutex _memory_tracer_mutex;
-#endif
 inline static void _default_callback_print_block(MemoryTracer const& /*memory_tracer*/,MemoryTracer::BlockInfo const& block) {
 	if (block.trace!=nullptr) {
 		for (StackFrame& frame : block.trace->frames) {
@@ -493,10 +493,8 @@ inline static void _default_callback_print_block(MemoryTracer const& /*memory_tr
 inline static void _default_callback_post_alloc (MemoryTracer const& /*memory_tracer*/,void* /*ptr*/,size_t /*alignment*/,size_t /*size*/) {}
 inline static void _default_callback_pre_dealloc(MemoryTracer const& /*memory_tracer*/,void* /*ptr*/,size_t /*alignment*/                ) {}
 inline static void _default_callback_leaks_detected(MemoryTracer const& memory_tracer) {
-	TINYLEAKCHECK_ASSERT(memory_tracer.blocks!=nullptr,"Implementation error!");
-
 	fprintf(stderr,"Leaks detected!\n");
-	for (auto const& iter : *memory_tracer.blocks) {
+	for (auto const& iter : memory_tracer.blocks) {
 		memory_tracer.callbacks.print_block(memory_tracer,*iter.second);
 	}
 
@@ -522,10 +520,7 @@ MemoryTracer::MemoryTracer() {
 	callbacks.leaks_detected = _default_callback_leaks_detected;
 }
 MemoryTracer::~MemoryTracer() {
-	if (blocks!=nullptr) [[unlikely]] {
-		//Just to ensure the printing order is nice
-		std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
-
+	if (!blocks.empty()) [[unlikely]] {
 		callbacks.leaks_detected(*this);
 	}
 }
@@ -535,11 +530,7 @@ void MemoryTracer::record_alloc  (void* ptr,size_t alignment,size_t size) {
 	if (mode.record.peek()) {
 		mode.record.push(false);
 
-		if (blocks==nullptr) [[unlikely]] {
-			blocks = new std::map<void*,BlockInfo*>;
-		}
-
-		blocks->emplace( ptr, new BlockInfo(ptr,alignment,size,mode.with_stacktrace.peek()) );
+		blocks.emplace( ptr, new BlockInfo(ptr,alignment,size,mode.with_stacktrace.peek()) );
 
 		callbacks.post_alloc(*this,ptr,alignment,size);
 
@@ -551,27 +542,70 @@ void MemoryTracer::record_dealloc(void* ptr,size_t alignment            ) {
 
 	std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
 
-	TINYLEAKCHECK_ASSERT(blocks!=nullptr,"Extra free!");
 	if (mode.record.peek()) {
 		mode.record.push(false);
 
 		callbacks.pre_dealloc(*this,ptr,alignment);
 
-		auto iter = blocks->find(ptr);
-		TINYLEAKCHECK_ASSERT(iter!=blocks->cend(),"Deleting an invalid pointer 0x%p!",ptr);
+		auto iter = blocks.find(ptr);
+		TINYLEAKCHECK_ASSERT(iter!=blocks.cend(),"Deleting an invalid pointer 0x%p!",ptr);
 		delete iter->second;
-		blocks->erase(iter);
-
-		if (blocks->empty()) [[unlikely]] {
-			delete blocks; blocks=nullptr;
-		}
+		blocks.erase(iter);
 
 		mode.record.pop();
 	}
 }
 
-#ifdef TINYLEAKCHECK_ENABLED
-MemoryTracer memory_tracer;
+/*
+When a `MemoryTracer` exists, it can record allocations, and when it's deleted it can report the
+allocations that weren't freed as memory leaks.  So when should the instance `memory_tracer` be
+created and destroyed?
+
+We can't tie it closely to the `operator new(...)` / `operator delete(...)` functions, because the
+whole point is that these might be mismatched.  Another alternative is to make the user allocate /
+deallocate it.  This is inconvenient, and of course the user is trying to debug mismatched
+allocation / deallocation in the first place.  The right solution is to make it a namespace-scope
+variable.
+
+Note, however, that this solution (along with the previous, as it happens) has a subtle problem:
+allocation can happen during normal runtime, but get freed by the standard library after the fact,
+causing a false positive.  A (real) example is something like:
+	(1) Static construction of `memory_tracer`.
+	(2) Beginning of `main(...)`.
+	(3) User code does file IO, standard library allocates memory.
+	(4) End of `main(...)`.
+	(5) Static destruction of `memory_tracer`, leaks reported!
+	(6) Standard library cleans up allocated memory.
+This problem cannot be solved "correctly".  The code is functionally correct, and there's no way to
+detect this case.  Since the latest we can run code is with static destructors, we have no way of
+knowing whether the standard library does indeed clean up, or whether it represents a leak.
+
+At the same time, constructing the memory leak detector at namespace scope allows us to detect (at
+least some) static memory leaks, which is very useful.  So, we still do this.  The false positives
+are explicitly ignored.
+*/
+MemoryTracer* memory_tracer = nullptr;
+static bool _ready = false;
+inline static void* _alloc  (          size_t alignment,size_t size) {
+	void* result = aligned_alloc( alignment, size );
+	if (_ready) [[likely]] memory_tracer->record_alloc(result,alignment,size);
+	return result;
+}
+inline static void  _dealloc(void* ptr,size_t alignment            ) {
+	if (_ready) [[likely]] memory_tracer->record_dealloc(ptr,alignment);
+	aligned_free(ptr);
+}
+struct _EnsureMemoryTracer final {
+	_EnsureMemoryTracer() {
+		memory_tracer = new MemoryTracer;
+		_ready = true;
+	}
+	~_EnsureMemoryTracer() noexcept {
+		_ready = false;
+		delete memory_tracer; memory_tracer=nullptr;
+	}
+};
+static _EnsureMemoryTracer _ensure_memory_tracer;
 #endif
 
 void prevent_linker_elison() {}
@@ -581,23 +615,17 @@ void prevent_linker_elison() {}
 #ifdef TINYLEAKCHECK_ENABLED
 
 [[nodiscard]] void* operator new( std::size_t size                             ) {
-	void* result = TinyLeakCheck::aligned_alloc( __STDCPP_DEFAULT_NEW_ALIGNMENT__, size );
-	TinyLeakCheck::memory_tracer.record_alloc(result,__STDCPP_DEFAULT_NEW_ALIGNMENT__,size);
-	return result;
+	return TinyLeakCheck::_alloc(__STDCPP_DEFAULT_NEW_ALIGNMENT__,size);
 }
 [[nodiscard]] void* operator new( std::size_t size, std::align_val_t alignment ) {
-	void* result = TinyLeakCheck::aligned_alloc( static_cast<size_t>(alignment), size );
-	TinyLeakCheck::memory_tracer.record_alloc(result,static_cast<size_t>(alignment),size);
-	return result;
+	return TinyLeakCheck::_alloc(static_cast<size_t>(alignment)  ,size);
 }
 
 void operator delete( void* ptr                             ) noexcept {
-	TinyLeakCheck::memory_tracer.record_dealloc(ptr,__STDCPP_DEFAULT_NEW_ALIGNMENT__);
-	TinyLeakCheck::aligned_free(ptr);
+	TinyLeakCheck::_dealloc(ptr,__STDCPP_DEFAULT_NEW_ALIGNMENT__);
 }
 void operator delete( void* ptr, std::align_val_t alignment ) noexcept {
-	TinyLeakCheck::memory_tracer.record_dealloc(ptr,static_cast<size_t>(alignment));
-	TinyLeakCheck::aligned_free(ptr);
+	TinyLeakCheck::_dealloc(ptr,static_cast<size_t>(alignment)  );
 }
 
 #endif

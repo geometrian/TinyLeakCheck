@@ -143,6 +143,7 @@ struct StackTrace final {
 	void basic_print(FILE* file=stderr,size_t indent=4) const noexcept; //Basic print function used by default.
 };
 
+#ifdef TINYLEAKCHECK_ENABLED
 //Memory tracer.  User does not need directly.
 struct MemoryTracer final {
 	struct Mode final {
@@ -177,8 +178,7 @@ struct MemoryTracer final {
 			void basic_print(FILE* file=stderr,size_t indent=2) const noexcept;
 	};
 	//Map of pointers onto blocks.  User should not change, but is exposed to user.
-	//	Note: if there are no blocks, this is null!
-	std::map<void*,BlockInfo*>* blocks = nullptr;
+	std::map<void*,BlockInfo*> blocks;
 
 	//Callbacks.  User may set to override defaults.
 	struct {
@@ -206,9 +206,9 @@ struct MemoryTracer final {
 	void record_dealloc(void* ptr,size_t alignment            );
 };
 
-//Per-thread memory tracer.  User does not need, but is exposed to the user.
-#ifdef TINYLEAKCHECK_ENABLED
-extern MemoryTracer memory_tracer;
+//Per-thread memory tracer.  User does not need, but is exposed to the user.  Note may not exist
+//	during static initialization!
+extern MemoryTracer* memory_tracer;
 #endif
 
 //User needs to call in order to prevent the linker from eliding this module.  See also:

@@ -75,6 +75,8 @@ On all non-Windows platforms, alignment requirements cause the allocated block t
 
 On some non-Windows platforms, static leaks cannot be detected.  This is because those platforms use non-C++ routines to allocate / deallocate static memory, even in C++.  This arguably violates the C++ specification.  I don't know if it can be worked around.  FWIW other detectors, such as Valgrind, don't detect this either.
 
+On some platforms, certain standard library calls trigger allocations which are only freed when the standard library cleans up (i.e., after static destruction).  There is no way, even in theory, to disambiguate these from real memory leaks.  However, `TINYLEAKCHECK_IGNORE_FUNCS` can be used to prevent them from being reported.
+
 The code intends to be conformant C++20, but compilers that allegedly support C++20 may still produce warnings.  Although some effort has been made to be accommodating, at a certain point, I don't care.  These are bugs in the compilers.  GCC is a good example of a compiler that has longstanding bugs.
 
 No warranty or guarantees are implied.  TinyLeakCheck is open-source and free under the [MIT license](LICENSE).
