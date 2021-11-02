@@ -266,7 +266,6 @@ StackTrace::StackTrace() noexcept :
 				{
 					std::map<HANDLE,StackTraceSymConfig*>::iterator iter;
 					if (!_sym_config) [[unlikely]] {
-						printf("Alloc   symbols in %p %p\n",GetCurrentProcess(),GetCurrentThread());
 						_sym_config = new std::map<HANDLE,StackTraceSymConfig*>;
 						ADD_CONFIG: iter=_sym_config->emplace( process, new StackTraceSymConfig(process) ).first;
 					} else {
@@ -440,7 +439,6 @@ StackTrace::~StackTrace() noexcept {
 		delete iter->second;
 		_sym_config->erase(iter);
 		if (_sym_config->empty()) [[unlikely]] {
-			printf("Dealloc symbols in %p %p\n",GetCurrentProcess(),GetCurrentThread());
 			delete _sym_config; _sym_config=nullptr;
 		}
 	}
