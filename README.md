@@ -71,7 +71,7 @@ A basic set of checks is performed for each allocation / deallocation (stuff lik
 
 Please note that TinyLeakCheck overrides the replaceable [`new`](https://en.cppreference.com/w/cpp/memory/new/operator_new) and [`delete`](https://en.cppreference.com/w/cpp/memory/new/operator_delete) operators, so you must not do that yourself (if you're doing your own memory allocators, then do your own leak checks :V ).  Also, C-style allocation / deallocation is not detected (but you shouldn't be using that anyway).
 
-On all non-Windows platforms, alignment requirements cause the allocated block to be larger than the requested size.  However, I have chosen the reported size to be the original size, as that is usually more-helpful.  If you had a lot of tiny allocations, the actually memory usage could be a slightly higher than you would figure from the memory usage (though this would be dwarfed by the trace's data itself).
+On all non-Windows platforms, alignment requirements cause the allocated block to be larger than the requested size.  However, I have chosen the reported size to be the original size, as that is usually more-helpful.  If you had a lot of tiny allocations, the actual memory usage could be a slightly higher than you would figure from the memory usage (though this would be dwarfed by the trace's data itself).
 
 On some non-Windows platforms, static leaks cannot be detected.  This is because those platforms use non-C++ routines to allocate / deallocate static memory, even in C++.  This arguably violates the C++ specification.  I don't know if it can be worked around.  FWIW other detectors, such as Valgrind, don't detect this either.
 
@@ -90,6 +90,7 @@ Ideas:
 - The version of this in my personal library has color output.  This wouldn't actually be too hard to add, at least on Linux or modern Windows, and it makes the traces *much* prettier.
 - Also in my personal library, padding out the function names in the trace so they're the same width would improve readability.
 - On a related note, optional support for `#include <format>` or [libfmt](https://fmt.dev) would be great!
+- Option to remove frames before main?
 - Memory blocks are reported in no particular order because they are recorded in a `std::map<...>`.  It would be ideal to output them in-order.  Note that the datastructure to accomplish this ought to retain the asymptotic efficiency of the map, but also allow deallocations of blocks to happen at any time.  Probably a map and linked list combo would work.
 - There is only one tracer for the whole program; it would be better to have a separate tracer for each thread to reduce contention, as was originally conceived.
 - TinyLeakCheck is unfortunately not very well tested yet.  Bug reports are welcome!

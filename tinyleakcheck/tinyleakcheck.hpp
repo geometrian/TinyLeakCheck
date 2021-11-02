@@ -7,6 +7,8 @@ TinyLeakCheck
 A tiny, standalone memory tracer and leak checker
 by Agatha
 
+https://github.com/agatha2/TinyLeakCheck
+
 Basic usage:
 	(1) Compile and link with this (either as source or as a library, I don't care).
 	(2) Call `TinyLeakCheck::prevent_linker_elison()` anywhere in your code (`#include` either this
@@ -67,7 +69,11 @@ User can `#define` any of the following to configure:
 
 #ifndef TINYLEAKCHECK_PRETTIFY_STRS
 	#define TINYLEAKCHECK_PRETTIFY_STRS\
-		{ {"> >",">>"}, {"basic_string<char,std::char_traits<char>,std::allocator<char>>","string"} }
+		{\
+			{"> >",">>"},\
+			{"basic_string<char,std::char_traits<char>,std::allocator<char>>","string"},\
+			{"basic_ifstream<char,std::char_traits<char>>","ifstream"}\
+		}
 #endif
 #ifndef TINYLEAKCHECK_PRETTIFY_ENVS
 	#define TINYLEAKCHECK_PRETTIFY_ENVS\
