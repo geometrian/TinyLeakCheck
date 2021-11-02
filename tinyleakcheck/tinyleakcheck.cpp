@@ -115,7 +115,7 @@ struct MutexWrapper final {
 	MutexWrapper() { MutexWrapper::ready=true; }
 };
 std::atomic_bool MutexWrapper::ready = false;
-MutexWrapper _creating_stacktrace_mutex;
+MutexWrapper _stacktrace_mutex;
 #endif
 
 void StackFrame::prettify_strings() {
@@ -169,6 +169,40 @@ void StackFrame::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const no
 	#endif
 }
 
+#ifdef _WIN32
+//Initializing and deinitializing the symbol walking is really slow.  Try to cache this per-process.
+struct StackTraceSymConfig final {
+	HANDLE const process;
+	size_t count;
+	explicit StackTraceSymConfig(HANDLE process) : process(process), count(count) {
+		//Initialize process symbol handler
+		#ifndef NDEBUG
+		{ BOOL ret=SymInitialize(process,nullptr,TRUE); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
+		#else
+		           SymInitialize(process,nullptr,TRUE);
+		#endif
+
+		//Configure the symbol handler.  See also:
+		//	https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symsetoptions
+		SymSetOptions(
+			SYMOPT_EXACT_SYMBOLS         | //Do not load non-matching PDB files.
+			SYMOPT_FAVOR_COMPRESSED      | //Favor compressed PDB files, of course.
+			#if defined TINYLEAKCHECK_AMD64 || defined TINYLEAKCHECK_IA_64
+			SYMOPT_INCLUDE_32BIT_MODULES | //In 64-bit mode, allow debugging 32-bit modules, too.
+			#endif
+			SYMOPT_LOAD_LINES              //Load line numbers
+		);
+	}
+	~StackTraceSymConfig() noexcept {
+		#ifndef NDEBUG
+			{ BOOL ret=SymCleanup(process); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
+		#else
+			           SymCleanup(process);
+		#endif
+	}
+};
+static std::map<HANDLE,StackTraceSymConfig*>* _sym_config = nullptr;
+#endif
 StackTrace::StackTrace() noexcept :
 	thread_id(std::this_thread::get_id())
 {
@@ -217,19 +251,20 @@ StackTrace::StackTrace() noexcept :
 				//	Line struct
 				IMAGEHLP_LINE64 line; line.SizeOfStruct=sizeof(IMAGEHLP_LINE64);
 
-				//Initialize process symbol handler
-				{ BOOL ret=SymInitialize(process,nullptr,TRUE); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
-
-				//Configure the symbol handler.  See also:
-				//	https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symsetoptions
-				SymSetOptions(
-					SYMOPT_EXACT_SYMBOLS         | //Do not load non-matching PDB files.
-					SYMOPT_FAVOR_COMPRESSED      | //Favor compressed PDB files, of course.
-					#if defined TINYLEAKCHECK_AMD64 || defined TINYLEAKCHECK_IA_64
-					SYMOPT_INCLUDE_32BIT_MODULES | //In 64-bit mode, allow debugging 32-bit modules, too.
-					#endif
-					SYMOPT_LOAD_LINES              //Load line numbers
-				);
+				//Initialize and configure symbol handler.  This is a global cache (note this
+				//	function is protected by mutex), for performance.
+				{
+					std::map<HANDLE,StackTraceSymConfig*>::iterator iter;
+					if (!_sym_config) [[unlikely]] {
+						printf("Alloc   symbols in %p %p\n",GetCurrentProcess(),GetCurrentThread());
+						_sym_config = new std::map<HANDLE,StackTraceSymConfig*>;
+						ADD_CONFIG: iter=_sym_config->emplace( process, new StackTraceSymConfig(process) ).first;
+					} else {
+						iter = _sym_config->find(process);
+						if (iter==_sym_config->cend()) [[unlikely]] goto ADD_CONFIG;
+					}
+					++iter->second->count;
+				}
 
 				//Read registers
 				CONTEXT frame_regs = {};
@@ -274,8 +309,12 @@ StackTrace::StackTrace() noexcept :
 						char filename_buffer[MAX_PATH];
 						static_assert(sizeof(HINSTANCE)==sizeof(HMODULE));
 						{
-							DWORD ret = GetModuleFileNameA( std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH );
-							TINYLEAKCHECK_ASSERT(ret>0,"Implementation error!");
+							#ifndef NDEBUG
+								DWORD ret = GetModuleFileNameA( std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH );
+								TINYLEAKCHECK_ASSERT(ret>0,"Implementation error!");
+							#else
+								            GetModuleFileNameA( std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH );
+							#endif
 						}
 						std::string filename = filename_buffer;
 
@@ -316,8 +355,6 @@ StackTrace::StackTrace() noexcept :
 					//Completed frame; continue to the next one
 					frames.push_back(f);
 				}
-
-				{ BOOL ret=SymCleanup(process); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
 			#endif
 		#else
 			//See also: https://www.gnu.org/software/libc/manual/html_node/Backtraces.html
@@ -357,10 +394,10 @@ StackTrace::StackTrace() noexcept :
 		#endif
 	};
 	#ifdef _WIN32
-		if (_creating_stacktrace_mutex.ready) {
+		if (_stacktrace_mutex.ready) {
 			//We only allow creating a stack trace from a single thread at a time.  This is because
 			//	all "DbgHelp" calls are single-threaded only.
-			std::lock_guard lock(_creating_stacktrace_mutex.mutex);
+			std::lock_guard lock(_stacktrace_mutex.mutex);
 
 			create();
 		} else {
@@ -376,6 +413,28 @@ StackTrace::StackTrace() noexcept :
 	//Don't show `create()` and this constructor; the first frame should be the location in the
 	//	caller.
 	pop(2);
+}
+StackTrace::~StackTrace() noexcept {
+	#ifdef _WIN32
+	std::lock_guard lock(_stacktrace_mutex.mutex);
+
+	TINYLEAKCHECK_ASSERT(_sym_config,"Implementation error!");
+
+	HANDLE process = GetCurrentProcess();
+	auto iter = _sym_config->find(process);
+	TINYLEAKCHECK_ASSERT(iter!=_sym_config->cend(),"Implementation error!");
+
+	TINYLEAKCHECK_ASSERT(iter->second->count>0,"Implementation error!");
+	--iter->second->count;
+	if (iter->second->count==0) [[unlikely]] {
+		delete iter->second;
+		_sym_config->erase(iter);
+		if (_sym_config->empty()) [[unlikely]] {
+			printf("Dealloc symbols in %p %p\n",GetCurrentProcess(),GetCurrentThread());
+			delete _sym_config; _sym_config=nullptr;
+		}
+	}
+	#endif
 }
 void StackTrace::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const noexcept {
 	for (auto const& frame : frames) {

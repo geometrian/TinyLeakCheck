@@ -138,6 +138,7 @@ struct StackTrace final {
 	std::thread::id thread_id;
 	std::deque<StackFrame> frames;
 	StackTrace() noexcept;
+	~StackTrace() noexcept;
 	void pop(size_t count=1) noexcept { for (size_t k=0;k<count;++k) frames.pop_front(); } //pop `count` number of stack frames
 	void basic_print(FILE* file=stderr,size_t indent=4) const noexcept; //Basic print function used by default.
 };
