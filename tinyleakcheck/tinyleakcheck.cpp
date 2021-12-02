@@ -184,7 +184,7 @@ void StackFrame::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const no
 struct StackTraceSymConfig final {
 	HANDLE const process;
 	size_t count;
-	explicit StackTraceSymConfig(HANDLE process) : process(process), count(count) {
+	explicit StackTraceSymConfig(HANDLE process) : process(process), count(0) {
 		//Initialize process symbol handler
 		#ifndef NDEBUG
 		{ BOOL ret=SymInitialize(process,nullptr,TRUE); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
