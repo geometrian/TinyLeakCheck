@@ -40,11 +40,11 @@ Any detected errors are reported immediately.  By default, the checker is only e
 
 An example comes with the project; you can build it with standard CMake.  Something like:
 ```sh
-mkdir build && (cd build && cmake .. -DCMAKE_BUILD_TYPE=Debug && make)
+mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Debug && make -j2
 ./build/example_leaks
-./build/example_stack_trace
 ./build/example_threads
 ```
+For a typical release build, by default the leak checking is automatically disabled (you can enable it, but the compiler may not allow us to see symbols).
 
 
 
@@ -56,11 +56,11 @@ Most of the implementation is also directly accessible.  The main structure of i
 
 - Mess with its `.mode` variable to configure whether leaks are recorded (and if so, if they are traced) at whatever granularity you please.
 - Walk through the current `.blocks` to see what memory has been allocated.
-- `.record_[de]alloc(...)` to trace stuff from your own code that is semantically an allocation/deallocation, but doesn't actually `new`/`delete` memory.
+- `.record_[de]alloc(⋯)` to trace stuff from your own code that is semantically an allocation/deallocation, but doesn't actually `new`/`delete` memory.
 - Change the instance's callbacks to override the memory leak detection and block printing functionality.
 - Change the instance's callbacks to intercept allocation / deallocation events.  For example, you can bind the latter to calculate your own memory statistics.  Please note that memory recording is disabled within these callbacks; if it were enabled and you made an allocation, there would be an infinite recursion!
 
-The exposed structure types of `TinyLeakCheck::` (accessible when "[tinyleakcheck.hpp](tinyleakcheck/tinyleakcheck.hpp)" is `#include`d) may also be directly useful.  In particular, `TinyLeakCheck::ArrayStack<...>` is a complete (albeit simple) datastructure that implements a statically sized array on the stack, and `TinyLeakCheck::StackTrace` is a general-purpose stack-trace generator—simply construct an instance anywhere, and it will record the current stack!
+The exposed structure types of `TinyLeakCheck::` (accessible when "[tinyleakcheck.hpp](tinyleakcheck/tinyleakcheck.hpp)" is `#include`d) may also be directly useful.  In particular, `TinyLeakCheck::ArrayStack<⋯>` is a complete (albeit simple) datastructure that implements a statically sized array on the stack, and `TinyLeakCheck::StackTrace` is a general-purpose stack-trace generator—simply construct an instance anywhere, and it will record the current stack!
 
 Note: if you don't call `TinyLeakCheck::prevent_linker_elison()`, then the linker will probably remove the entire leak checker.  You might actually do this deliberately to some effect—e.g. by omitting the call in release mode to optimize it out (albeit by default it is optimized out in release mode anyway).
 
@@ -70,7 +70,7 @@ Note: if you don't call `TinyLeakCheck::prevent_linker_elison()`, then the linke
 
 TinyLeakCheck is standalone, and works on any standard, modern platform (it has been tested on Windows and Linux).
 
-It does require C++20—in particular because there is quite a lot of use of certain [attributes](https://en.cppreference.com/w/cpp/language/attributes) and of [`std::bit_cast<...>(...)`](https://en.cppreference.com/w/cpp/numeric/bit_cast), but also because it's well after 2020, people.  Using older tech is not a virtue!  I assume that people who are using older versions of C++ are time travelers looking to take code back to their less enlightened times, and people using C will be uninterested in this project because by definition they don't care enough about writing reasonable-quality code in the first place.
+It does require C++23—in particular because of [`std::stacktrace`](https://en.cppreference.com/w/cpp/utility/basic_stacktrace.html).  There is also quite a lot of use of [attributes](https://en.cppreference.com/w/cpp/language/attributes) and some [`std::bit_cast<⋯>(⋯)`](https://en.cppreference.com/w/cpp/numeric/bit_cast)ing.  It is well after 2023, people.  Using older tech [is *not* a virtue](https://geometrian.com/projects/blog/use_a_modern_language_already.html)!
 
 
 
@@ -86,7 +86,7 @@ Static leaks cannot always be detected.  This is because the order of static ini
 
 On some platforms, certain standard library calls trigger allocations which are only freed when the standard library cleans up (i.e., after static destruction).  There is no way, even in theory, to disambiguate these from real memory leaks.  However, `TINYLEAKCHECK_IGNORE_FUNCS` can be used to prevent them from being reported.
 
-The code intends to be conformant C++20, but compilers that allegedly support C++20 may still produce warnings.  Although some effort has been made to be accommodating, at a certain point, I don't care.  These are bugs in the compilers.  GCC is the main example of a compiler that has such longstanding bugs.
+The code intends to be conformant C++23, but compilers that allegedly support C++23 may still produce warnings.  Although some effort has been made to be accommodating, at a certain point, I don't care.  These are bugs in the compilers.  GCC is the main example of a compiler that has such longstanding bugs.
 
 No warranty or guarantees are implied.  TinyLeakCheck is open-source and free under the [MIT license](LICENSE).
 
@@ -95,20 +95,15 @@ No warranty or guarantees are implied.  TinyLeakCheck is open-source and free un
 ## Potential Improvements and Contributing
 
 Improving the stack-trace and data recording:
-- Replace stack-trace with [`std::basic_stacktrace`](https://en.cppreference.com/w/cpp/utility/basic_stacktrace.html) after we confirm it's supported!
-- More detailed leak information on non-Windows platforms (probably just use `std::basic_stacktrace`)!
-- Ignores only work when the function name is available (i.e. when a trace is created).  Make a lighter-weight trace that just gets the function name to allow this all the time?  Would be nice to have that feature just anyway.  (Again, probably just use `std::basic_stacktrace`.)
 - Option to remove frames before main?
-
-Improving the underlying tracer:
-- Look into static leak checking again?  We rejected tying it to `operator new` previously, but maybe it can be made to work.
-- Memory blocks are reported in no particular order because they are recorded in a `std::map<...>`.  It would be ideal to output them in-order.  Note that the datastructure to accomplish this ought to retain the asymptotic efficiency of the map, but also allow deallocations of blocks to happen at any time.  Probably a map and linked list combo would work.
-- There is only one tracer for the whole program; it would be better to have a separate tracer for each thread to reduce contention, as was originally conceived.
-
-Misc.:
 - The version of this in my personal library has color output.  This wouldn't actually be too hard to add, at least on Linux or modern Windows, and it makes the traces *much* prettier.
 - Also in my personal library, padding out the function names in the trace so they're the same width would improve readability.
 - On a related note, optional support for `#include <format>` or [libfmt](https://fmt.dev) would be great!
+
+Improving the underlying tracer:
+- Look into static leak checking again?  We rejected tying it to `operator new` previously, but maybe it can be made to work.
+- Memory blocks are reported in no particular order because they are recorded in a `std::map<⋯>`.  It would be ideal to output them in-order.  Note that the datastructure to accomplish this ought to retain the asymptotic efficiency of the map, but also allow deallocations of blocks to happen at any time.  Probably a map and linked list combo would work.
+- There is only one tracer for the whole program; it would be better to have a separate tracer for each thread to reduce contention, as was originally conceived.
 
 TinyLeakCheck is unfortunately not very well tested yet.  Bug reports are welcome!  Bug reports can be opened in the issue tracker.
 

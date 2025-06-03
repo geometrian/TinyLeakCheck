@@ -16,6 +16,7 @@
 #endif
 
 #include <bit>
+#include <format>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -28,12 +29,12 @@
 
 #ifndef __cpp_lib_bit_cast
 
-//Fix the `std::bit_cast<...>(...)` they don't actually have.  If you don't like me putting stuff in
+//Fix the `std::bit_cast<⋯>(⋯)` they don't actually have.  If you don't like me putting stuff in
 //	`std::`, then you should have implemented the functionality you were supposed to :)
 namespace std
 {
 
-template<class TypeTo,class TypeFrom> inline static
+template< class TypeTo, class TypeFrom > inline static
 TypeTo bit_cast( TypeFrom const& from ) noexcept
 {
 	static_assert( sizeof(TypeTo)==sizeof(TypeFrom), "Size mismatch!" );
@@ -58,7 +59,7 @@ namespace TinyLeakCheck
 
 #ifdef _WIN32
 
-inline static void* aligned_malloc( std::size_t alignment,  std::size_t size) noexcept
+inline static void* aligned_malloc( std::size_t alignment, std::size_t size ) noexcept
 {
 	return _aligned_malloc( size, alignment );
 }
@@ -69,7 +70,7 @@ inline static void aligned_free( void* ptr ) noexcept
 
 #else
 
-//Note that for `std::aligned_alloc(...)`, the size is required to be a multiple of the alignment.
+//Note that for `std::aligned_alloc(⋯)`, the size is required to be a multiple of the alignment.
 //	We could manually pad it out:
 #if 0
 inline static void* aligned_malloc( std::size_t alignment, std::size_t size ) noexcept
@@ -85,7 +86,7 @@ versions that causes memory corruption.  I have validated this extensively and i
 people have noticed this in other contexts since at least 2016---yet even on up-to-date systems the
 bug persists.  Simply amazing.  Instead, basically implement aligned malloc and free ourselves :V
 
-TODO: recheck.  In some documentations, `std::aligned_alloc(...)` had swapped arguments?
+TODO: recheck.  In some documentations, `std::aligned_alloc(⋯)` had swapped arguments?
 */
 using TypeOffset = uint16_t;
 static void* aligned_malloc( std::size_t alignment, std::size_t size ) noexcept
@@ -162,419 +163,6 @@ static void str_replace(
 	return str.find(other) != std::string::npos;
 }
 
-#ifdef _WIN32
-struct MutexWrapper final
-{
-	std::mutex mutex;
-	static std::atomic_bool ready;
-
-	MutexWrapper() { MutexWrapper::ready=true; }
-};
-std::atomic_bool MutexWrapper::ready = false;
-#ifdef __clang__
-	#pragma clang diagnostic push
-	#pragma clang diagnostic ignored "-Wexit-time-destructors"
-	#pragma clang diagnostic ignored "-Wglobal-constructors"
-#endif
-static MutexWrapper _stacktrace_mutex;
-#ifdef __clang__
-	#pragma clang diagnostic pop
-#endif
-#endif
-
-[[nodiscard]] bool StackFrame::matches_func( std::string_view fnname ) const noexcept
-{
-	#ifdef _WIN32
-		return str_contains( name               , fnname );
-	#else
-		return str_contains( function_identifier, fnname );
-	#endif
-}
-void StackFrame::prettify_strings()
-{
-	#ifdef TINYLEAKCHECK_ENABLED
-	memory_tracer->mode.record.push(false);
-	{
-	#endif
-		struct PrettifyReplacement final { std::string find, replace; };
-		PrettifyReplacement const replacements[] = TINYLEAKCHECK_PRETTIFY_STRS;
-
-		#ifdef _WIN32
-			std::string& target_str = name;
-			#else
-			std::string& target_str = function_identifier;
-			#endif
-			for ( PrettifyReplacement const& replacement : replacements )
-			{
-				target_str = str_get_replaced( target_str, replacement.find,replacement.replace );
-			}
-
-			#ifdef _WIN32
-			std::string shortest_filename = filename;
-			for ( char const* varname : TINYLEAKCHECK_PRETTIFY_ENVS )
-			{
-				char const* var = std::getenv(varname);
-				if ( var == nullptr ) continue;
-				std::string repl = str_get_replaced( filename, var,std::string("%")+varname+"%" );
-				if ( repl.length() < shortest_filename.length() ) shortest_filename = repl;
-			}
-			filename = shortest_filename;
-		#else
-			//TODO: would be nice to have file information . . .
-		#endif
-	#ifdef TINYLEAKCHECK_ENABLED
-	}
-	memory_tracer->mode.record.pop();
-	#endif
-}
-void StackFrame::basic_print( FILE* file/*=stderr*/, size_t indent/*=4*/ ) const noexcept
-{
-	for ( size_t k=0; k<indent; ++k ) fputc( ' ', file );
-	#ifdef _WIN32
-		fprintf( file, "%s!", module.c_str() );
-		if ( !name.empty() ) [[likely]] fprintf( file, "%s", name.c_str() );
-		else                            fprintf( file, "0x%p", return_address );
-		if ( !filename.empty() ) [[likely]]
-		{
-			fprintf( file, " at %s(%zu,%zu)\n", filename.c_str(), line,line_offset );
-		}
-		else
-		{
-			fprintf( file, "\n" );
-		}
-	#else
-		fprintf( file, "%p: %s\n", return_address, function_identifier.c_str() );
-	#endif
-}
-
-
-
-#ifdef _WIN32
-//Initializing and deinitializing the symbol walking is really slow.  Try to cache this per-process.
-struct StackTraceSymConfig final
-{
-	HANDLE const process;
-	size_t count;
-
-	explicit StackTraceSymConfig( HANDLE process ) : process(process), count(0)
-	{
-		//Initialize process symbol handler
-		#ifndef NDEBUG
-			{
-				BOOL ret = SymInitialize( process, nullptr, TRUE );
-				TINYLEAKCHECK_ASSERT( ret==TRUE, "Implementation error!" );
-			}
-		#else
-			SymInitialize( process, nullptr, TRUE );
-		#endif
-
-		//Configure the symbol handler.  See also:
-		//	https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symsetoptions
-		SymSetOptions(
-			SYMOPT_EXACT_SYMBOLS         | //Do not load non-matching PDB files.
-			SYMOPT_FAVOR_COMPRESSED      | //Favor compressed PDB files, of course.
-			#if defined TINYLEAKCHECK_AMD64 || defined TINYLEAKCHECK_IA_64
-			SYMOPT_INCLUDE_32BIT_MODULES | //In 64-bit mode, allow debugging 32-bit modules, too.
-			#endif
-			SYMOPT_LOAD_LINES              //Load line numbers
-		);
-	}
-	~StackTraceSymConfig() noexcept
-	{
-		#ifndef NDEBUG
-			{
-				BOOL ret = SymCleanup(process);
-				TINYLEAKCHECK_ASSERT( ret==TRUE, "Implementation error!" );
-			}
-		#else
-			SymCleanup(process);
-		#endif
-	}
-};
-static std::map< HANDLE, StackTraceSymConfig* >* _sym_config = nullptr;
-#endif
-StackTrace::StackTrace() noexcept :
-	thread_id( std::this_thread::get_id() )
-{
-	auto create = [this]() noexcept -> void
-	{
-		#ifdef TINYLEAKCHECK_ENABLED
-		/*
-		Can't do memory tracing here with a stack trace because the implementation of stack tracing
-		. . . allocates memory, which will then request a stack trace: an infinite recursion.  At
-		the same time, though, we *are* allocating memory, so we still need to record the
-		allocations so that the tracer won't be confused when this stack trace is later deallocated.
-		*/
-		memory_tracer->mode.with_stacktrace.push(false);
-		#endif
-
-		#ifdef _WIN32
-			//https://www.rioki.org/2017/01/09/windows_stacktrace.html
-			//https://gist.github.com/rioki/85ca8295d51a5e0b7c56e5005b0ba8b4
-
-			#if   defined TINYLEAKCHECK_IA_32
-				constexpr DWORD const machine_type = IMAGE_FILE_MACHINE_I386;
-			#elif defined TINYLEAKCHECK_AMD64
-				constexpr DWORD const machine_type = IMAGE_FILE_MACHINE_AMD64;
-			#elif defined TINYLEAKCHECK_IA_64
-				constexpr DWORD const machine_type = IMAGE_FILE_MACHINE_IA64;
-				#error "Not implemented!"
-			#else
-				#error "Not supported by Windows!"
-			#endif
-			#if defined TINYLEAKCHECK_IA32 || defined TINYLEAKCHECK_AMD64
-				//Note: in this function, we appear to use 64-bit-specific functions, e.g.
-				//	`StackWalk64(...)`.  However, these functions do support both 32-bit and 64-bit
-				//	code.  See:
-				//		https://docs.microsoft.com/en-us/windows/win32/debug/updated-platform-support
-
-				//Get process and thread handles
-				HANDLE process = GetCurrentProcess();
-				HANDLE thread  = GetCurrentThread ();
-
-				//Preallocate
-				//	Symbol struct
-				constexpr size_t symbol_backing_num_bytes = sizeof(IMAGEHLP_SYMBOL64) + 255;
-				alignas( alignof(IMAGEHLP_SYMBOL64) )
-				uint8_t symbol_buffer[symbol_backing_num_bytes] = {};
-				PIMAGEHLP_SYMBOL64 symbol = reinterpret_cast<IMAGEHLP_SYMBOL64*>(symbol_buffer);
-				symbol->SizeOfStruct  = sizeof(IMAGEHLP_SYMBOL64);
-				symbol->MaxNameLength = symbol_backing_num_bytes - offsetof(IMAGEHLP_SYMBOL64,Name);
-				//	Line struct
-				IMAGEHLP_LINE64 line; line.SizeOfStruct=sizeof(IMAGEHLP_LINE64);
-
-				//Initialize and configure symbol handler.  This is a global cache (note this
-				//	function is protected by mutex), for performance.
-				{
-					std::map< HANDLE, StackTraceSymConfig* >::iterator iter;
-					if ( !_sym_config ) [[unlikely]]
-					{
-						_sym_config = new std::map< HANDLE, StackTraceSymConfig *>;
-						ADD_CONFIG:
-						iter = _sym_config->emplace(
-							process, new StackTraceSymConfig(process)
-						).first;
-					}
-					else
-					{
-						iter = _sym_config->find(process);
-						if ( iter == _sym_config->cend() ) [[unlikely]] goto ADD_CONFIG;
-					}
-					++iter->second->count;
-				}
-
-				//Read registers
-				CONTEXT frame_regs = {};
-				frame_regs.ContextFlags = CONTEXT_FULL;
-				RtlCaptureContext( &frame_regs );
-
-				//Construct the partial stack "frame" inside the current one.
-				STACKFRAME64 next_frame = {};
-				#if   defined TINYLEAKCHECK_IA_32
-					next_frame.AddrPC.Offset = frame_regs.Eip;
-					next_frame.AddrPC.Mode   = AddrModeFlat;
-					next_frame.AddrFrame.Offset = frame_regs.Ebp;
-					next_frame.AddrFrame.Mode   = AddrModeFlat;
-					next_frame.AddrStack.Offset = frame_regs.Esp;
-					next_frame.AddrStack.Mode   = AddrModeFlat;
-				#elif defined TINYLEAKCHECK_AMD64
-					next_frame.AddrPC.Offset = frame_regs.Rip;
-					next_frame.AddrPC.Mode   = AddrModeFlat;
-					next_frame.AddrFrame.Offset = frame_regs.Rbp;
-					next_frame.AddrFrame.Mode   = AddrModeFlat;
-					next_frame.AddrStack.Offset = frame_regs.Rsp;
-					next_frame.AddrStack.Mode   = AddrModeFlat;
-				#else
-					#error "Not implemented!"
-				#endif
-
-				//Semantically, `StackWalk64(...)` gets the higher stack frame `next_frame` based on
-				//	`frame_regs`.
-				while ( StackWalk64(
-					machine_type,
-					process, thread,
-					&next_frame, &frame_regs,
-					nullptr, SymFunctionTableAccess, SymGetModuleBase, nullptr
-				) ) {
-					StackFrame f;
-
-					static_assert( sizeof(void*) == sizeof(DWORD64) );
-					f.return_address = std::bit_cast<void*>(next_frame.AddrPC.Offset);
-
-					DWORD64 module_base = SymGetModuleBase64( process, next_frame.AddrPC.Offset );
-					if ( module_base != 0 ) [[likely]]
-					{
-						char filename_buffer[MAX_PATH];
-						static_assert( sizeof(HINSTANCE) == sizeof(HMODULE) );
-						{
-							#ifndef NDEBUG
-								DWORD ret = GetModuleFileNameA(
-									std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH
-								);
-								TINYLEAKCHECK_ASSERT( ret>0, "Implementation error!" );
-							#else
-								GetModuleFileNameA(
-									std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH
-								);
-							#endif
-						}
-						std::string filename = filename_buffer;
-
-						size_t k = filename.find_last_of("\\/");
-						if ( k != std::string::npos ) [[likely]]
-						{
-							f.module = filename.substr( k + 1 );
-						}
-						else
-						{
-							f.module = filename;
-						}
-					}
-					else
-					{
-						//TODO: `GetLastError()` useful here?
-						//f.module = "(unknown module)";
-						SetLastError(0);
-					}
-
-					//Get symbol name
-					if ( SymGetSymFromAddr64(
-						process, next_frame.AddrPC.Offset, nullptr, symbol
-					)==TRUE ) [[likely]]
-					{
-						f.name = symbol->Name;
-					}
-					else
-					{
-						//TODO: `GetLastError()` useful here?
-						//f.name = "(unknown function)";
-						SetLastError(0);
-					}
-
-					//Get symbol filename, line number, and line offset
-					DWORD line_offset = 0;
-					if ( SymGetLineFromAddr64(
-						process, next_frame.AddrPC.Offset, &line_offset, &line
-					)==TRUE) [[likely]]
-					{
-						f.filename    = line.FileName;
-						f.line        = line.LineNumber;
-						f.line_offset = line_offset;
-					}
-					else
-					{
-						//TODO: `GetLastError()` useful here?
-						f.line        = 0;
-						f.line_offset = 0;
-						SetLastError(0);
-					} 
-
-					//Completed frame; continue to the next one
-					frames.push_back(f);
-				}
-			#endif
-		#else
-			//See also: https://www.gnu.org/software/libc/manual/html_node/Backtraces.html
-
-			std::vector<void*> return_addresses;
-			return_addresses.resize(10);
-			size_t num_frames;
-			LOOP:
-				num_frames = static_cast<size_t>( backtrace(
-					return_addresses.data(), static_cast<int>(return_addresses.size())
-				) );
-				if ( num_frames == return_addresses.size() )
-				{
-					return_addresses.resize( return_addresses.size() * 2 );
-					goto LOOP;
-				}
-			return_addresses.resize(num_frames);
-			frames.resize(num_frames);
-
-			char** strings = backtrace_symbols(
-				return_addresses.data(),
-				static_cast<int>(return_addresses.size())
-			);
-			TINYLEAKCHECK_ASSERT( strings!=nullptr, "Could not get stack trace!" );
-			struct FreeRAII final
-			{
-				char**const ptr;
-
-				constexpr explicit FreeRAII( char** ptr ) noexcept : ptr(ptr) {}
-				~FreeRAII() { free(ptr); }
-			};
-			FreeRAII free_raii(strings);
-
-			for ( size_t k=0; k<num_frames; ++k )
-			{
-				frames[k].return_address = return_addresses[k];
-				frames[k].function_identifier = strings[k];
-			}
-
-			//TODO: would be nice to have file information . . .
-		#endif
-
-		#ifdef TINYLEAKCHECK_ENABLED
-		memory_tracer->mode.with_stacktrace.pop();
-		#endif
-	};
-	#ifdef _WIN32
-		if (_stacktrace_mutex.ready)
-		{
-			//We only allow creating a stack trace from a single thread at a time.  This is because
-			//	all "DbgHelp" calls are single-threaded only.
-			std::lock_guard lock(_stacktrace_mutex.mutex);
-
-			create();
-		}
-		else
-		{
-			//However, if the mutex has not been created yet, then we can't use it.  Fortunately,
-			//	this situation happens when we're in the static initialization phase, and so we're
-			//	single-threaded anyway.
-			create();
-		}
-	#else
-		create();
-	#endif
-
-	//Don't show `create()` and this constructor; the first frame should be the location in the
-	//	caller.
-	pop(2);
-}
-StackTrace::~StackTrace() noexcept
-{
-	#ifdef _WIN32
-	std::lock_guard lock(_stacktrace_mutex.mutex);
-
-	TINYLEAKCHECK_ASSERT( _sym_config, "Implementation error!" );
-
-	HANDLE process = GetCurrentProcess();
-	auto iter = _sym_config->find(process);
-	TINYLEAKCHECK_ASSERT( iter!=_sym_config->cend(), "Implementation error!" );
-
-	TINYLEAKCHECK_ASSERT( iter->second->count>0, "Implementation error!" );
-	--iter->second->count;
-	if ( iter->second->count == 0 ) [[unlikely]]
-	{
-		delete iter->second;
-		_sym_config->erase(iter);
-		if ( _sym_config->empty() ) [[unlikely]]
-		{
-			delete _sym_config;
-			_sym_config = nullptr;
-		}
-	}
-	#endif
-}
-void StackTrace::basic_print( FILE* file/*=stderr*/,size_t indent/*=4*/ ) const noexcept
-{
-	for ( auto const& frame : frames )
-	{
-		frame.basic_print(file,indent);
-	}
-}
-
 
 
 #ifdef TINYLEAKCHECK_ENABLED
@@ -583,51 +171,120 @@ MemoryTracer::BlockInfo::BlockInfo(
 ) noexcept :
 	ptr(ptr), alignment(alignment),size(size), thread_id(std::this_thread::get_id())
 {
-	if (with_stacktrace) [[likely]]
+	if ( !with_stacktrace ) [[unlikely]]
 	{
-		trace = new StackTrace;
-		/*
-		We need to pop four times to get to the call site where the memory was allocated:
-			BlockInfo::BlockInfo(...)
-			Tracer::record_alloc(...)
-			_alloc(...)
-			operator new(...) / operator new[](...)
-		*/
-		trace->pop(4);
+		//Stack trace was not requested.  This improves performance and is actually necessary e.g.
+		//	when generating the stack trace itself (we'd get infinite recursion).
+		return;
 	}
-	else
-	{
-		//Stack trace was not requested.  This massively improves performance and is actually
-		//	necessary e.g. when generating the stack trace itself (we'd get infinite recursion).
-		trace = nullptr;
-	}
+
+	trace = std::stacktrace( std::stacktrace::current() );
 }
 
-void MemoryTracer::BlockInfo::basic_print(
-	FILE* file/*=stderr*/, size_t indent/*=2*/
-) const noexcept
+[[nodiscard]] bool MemoryTracer::BlockInfo::_finalize() const noexcept
 {
-	for (size_t k=0; k<indent; ++k ) fputc( ' ', file );
-	fputs( "Leaked ", file );
-	#ifdef _WIN32
-	fprintf( file, "0x%p", ptr );
-	#else
-	fprintf( file, "%p"  , ptr );
-	#endif
-	std::stringstream ss;
-	ss << thread_id;
-	std::string thread_id_str = ss.str();
-	fprintf( file, " ( align %zu, size %zu, thread %s )", alignment, size, thread_id_str.c_str() );
+	bool keep = true;
 
-	if ( trace != nullptr ) [[likely]]
+	struct PrettifyReplacement final { std::string find, replace; };
+	PrettifyReplacement const replacements[] = TINYLEAKCHECK_PRETTIFY_STRS;
+	std::string const ignore_funcs[] = TINYLEAKCHECK_IGNORE_FUNCS;
+
+	//Leak record
+	_str = std::format(
+		"  Leaked {:p} ( align {}, size {}, thread {} )",
+		ptr,
+		alignment, size, thread_id
+	);
+
+	/*
+	Stack trace
+		We need to pop four times to get to the call site where the memory was allocated:
+			MemoryTracer::BlockInfo::BlockInfo(⋯)
+			MemoryTracer::record_alloc(⋯)
+			_alloc(⋯)
+			operator new(⋯) / operator new[](⋯)
+	*/
+	if ( trace.size() <= 4 ) [[unlikely]]
 	{
-		fprintf( file, " allocated at:\n" );
-		trace->basic_print( file, indent+2 );
+		_str += '\n';
 	}
 	else
 	{
-		fprintf( file, "\n" );
+		_str += " allocated at:\n";
+		for ( size_t iframe=4; iframe<trace.size(); ++iframe )
+		{
+			std::stacktrace_entry const& frame = trace[iframe];
+
+			std::string descr = frame.description();
+			for ( PrettifyReplacement const& replacement : replacements )
+			{
+				descr = str_get_replaced( descr, replacement.find,replacement.replace );
+			}
+			if (keep)
+			{
+				for ( std::string const& ignore_func : ignore_funcs )
+				{
+					if ( str_contains( descr, ignore_func ) )
+					{
+						keep = false;
+						break;
+					}
+				}
+			}
+
+			std::string frame_str = "    ";
+
+			//frame_str += module;
+
+			if ( !descr.empty() ) [[likely]] frame_str += descr;
+			else
+			{
+				//frame_str += std::to_string(return_address);
+				frame_str += "<unknown>";
+			}
+
+			std::string filename = frame.source_file();
+			if ( filename.empty() ) [[unlikely]] frame_str += '\n';
+			else
+			{
+				//Take shortest replacement
+				std::string shortest_filename = filename;
+				for ( char const* varname : TINYLEAKCHECK_PRETTIFY_ENVS )
+				{
+					char const* var = std::getenv(varname);
+					if ( var == nullptr ) continue;
+					std::string repl = str_get_replaced(
+						filename, var,std::string("%")+varname+"%"
+					);
+					if ( repl.length() < shortest_filename.length() ) shortest_filename = repl;
+				}
+				filename = shortest_filename;
+
+				frame_str += " at ";
+				frame_str += filename;
+				uint64_t line_no = static_cast<uint64_t>( frame.source_line() );
+				if ( line_no != 0 )
+				{
+					frame_str += std::format( "({})", line_no );
+					//"(%zu,%zu)\n", line,line_offset; //TODO somehow?
+				}
+				frame_str += '\n';
+			}
+
+			_str += frame_str;
+		}
 	}
+
+	_finalized = true;
+
+	return keep;
+}
+
+void MemoryTracer::BlockInfo::basic_print( FILE* file/*=stderr*/ ) const noexcept
+{
+	if ( !_finalized ) (void)_finalize();
+
+	fprintf( file, "%s", _str.c_str() );
 }
 
 
@@ -650,7 +307,7 @@ static void _default_callback_post_alloc (
 	MemoryTracer const& /*tracer*/, void* /*ptr*/, size_t /*alignment*/, size_t /*size*/
 ) {}
 static void _default_callback_pre_dealloc(
-	MemoryTracer const& /*tracer*/, void* /*ptr*/, size_t /*alignment*/                 
+	MemoryTracer const& /*tracer*/, void* /*ptr*/, size_t /*alignment*/
 ) {}
 [[noreturn]] static void _default_callback_leaks_detected( MemoryTracer const& tracer )
 {
@@ -694,38 +351,38 @@ MemoryTracer::~MemoryTracer()
 {
 	if ( blocks.empty() ) [[likely]] return;
 
-	//Prettify strings and process ignores
-	std::string const ignore_funcs[] = TINYLEAKCHECK_IGNORE_FUNCS;
-	for ( auto iter=blocks.begin(); iter!=blocks.end(); )
+	memory_tracer->mode.record.push(false); //and don't bother to pop later
+
+	//Final processing on all blocks, calculating prettified strings and removing those which
+	//	should be ignored.
+	for ( auto iter=blocks.cbegin(); iter!=blocks.cend(); )
 	{
-		BlockInfo* block = iter->second;
-		if ( block->trace != nullptr )
+		BlockInfo const* block = iter->second;
+
+		bool keep = block->_finalize();
+		if (keep) [[unlikely]]
 		{
-			for ( StackFrame& frame : block->trace->frames )
-			{
-				frame.prettify_strings();
-
-				for ( std::string const& ignore_func : ignore_funcs )
-				{
-					if ( !frame.matches_func(ignore_func) ) [[likely]] continue;
-
-					delete block;
-					auto iter_old = iter++;
-					blocks.erase(iter_old);
-					goto NEXT_BLOCK;
-				}
-			}
+			++iter;
 		}
-		++iter;
-		NEXT_BLOCK:;
+		else
+		{
+			auto iter_old = iter++;
+			blocks.erase(iter_old);
+			delete block;
+		}
 	}
 
 	if ( blocks.empty() ) [[likely]] return;
+
 	//If there are still blocks, then memory leak!
 
 	callbacks.leaks_detected(*this);
 
-	for ( auto const& iter : blocks ) delete iter.second;
+	for ( auto iter : blocks )
+	{
+		BlockInfo* block = iter.second;
+		delete iter.second;
+	}
 	//blocks.clear();
 }
 
@@ -773,7 +430,7 @@ When a `MemoryTracer` exists, it can record allocations, and when it's deleted i
 allocations that weren't freed as memory leaks.  So when should the instance `memory_tracer` be
 created and destroyed?
 
-We can't tie it closely to the `operator new(...)` / `operator delete(...)` functions, because the
+We can't tie it closely to the `operator new(⋯)` / `operator delete(⋯)` functions, because the
 whole point is that these might be mismatched.  Another alternative is to make the user allocate /
 deallocate it.  This is inconvenient, and of course the user is trying to debug mismatched
 allocation / deallocation in the first place.  The right solution is to make it a namespace-scope
@@ -783,9 +440,9 @@ Note, however, that this solution (along with the previous, as it happens) has a
 allocation can happen during normal runtime, but get freed by the standard library after the fact,
 causing a false positive.  A (real) example is something like:
 	(1) Static construction of `memory_tracer`.
-	(2) Beginning of `main(...)`.
+	(2) Beginning of `main(⋯)`.
 	(3) User code does file IO, standard library allocates memory.
-	(4) End of `main(...)`.
+	(4) End of `main(⋯)`.
 	(5) Static destruction of `memory_tracer`, leaks reported!
 	(6) Standard library cleans up allocated memory.
 This problem cannot be solved "correctly".  The code is functionally correct, and there's no way to

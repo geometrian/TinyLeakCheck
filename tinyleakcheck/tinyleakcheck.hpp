@@ -14,7 +14,7 @@ Basic usage:
 	(2) Call `TinyLeakCheck::prevent_linker_elison()` anywhere in your code (`#include` either this
 	    file, "tinyleakcheck.hpp", or the minimal header "tiniestleakcheck.hpp").
 
-There are no dependencies other than C++20 or newer (which you should be using anyway).  See the
+There are no dependencies other than C++23 or newer (which you should be using anyway).  See the
 readme for more discussion.
 
 ####################################################################################################
@@ -45,17 +45,17 @@ User can `#define` any of the following to configure:
 		Defines an array of environment variables to be searched for prettifying filenames.  If the
 		variable is found in the name string, it is replaced by "%⟨varname⟩%".  Note that this must
 		have been `#define`d when the "tinyleakcheck.cpp" file is compiled in order to have an
-		effect!  This flag only has an effect on Windows because filenames are only available there.
+		effect!
 
 	#define TINYLEAKCHECK_IGNORE_FUNCS ⟨brace initializer of array of function names⟩
 		Defines an array of string that, if a leak triggers inside of a function whose name (after
 		prettifying) contains any of them, will not "count" as a leak.  This is also used to handle
 		certain memory allocations within the standard library that are cleaned up after static
 		destruction (such an allocation would be falsely reported as a memory leak).  Note that this
-		should *only* be used for ignoring functions in standard libraries; don't use this instead
-		of fixing your code!
+		should *only* be used for ignoring functions in standard libraries; do *not* use this
+		instead of fixing your code!
 
-	#define TINYLEAKCHECK_ASSERT <assert>
+	#define TINYLEAKCHECK_ASSERT ⟨assert⟩
 		Defines an assertion function for TinyLeakCheck to use internally.  If none is provided, it
 		uses `<cassert>`'s assert.  Note that this must be `#define`d when the "tinyleakcheck.cpp"
 		file is compiled in order to have (complete) effect!
@@ -84,7 +84,7 @@ User can `#define` any of the following to configure:
 #endif
 #ifndef TINYLEAKCHECK_ASSERT
 	#include <cassert>
-	#define TINYLEAKCHECK_ASSERT(CHECK_EXPR,FMT_CSTR,...) assert(CHECK_EXPR)
+	#define TINYLEAKCHECK_ASSERT( CHECK_EXPR, FMT_CSTR, ... ) assert(CHECK_EXPR)
 #endif
 
 #if   defined __i686__ || defined _M_IX86 //IA-32 (32-bit x86)
@@ -108,6 +108,7 @@ User can `#define` any of the following to configure:
 #include <array>
 #include <deque>
 #include <map>
+#include <stacktrace>
 #include <string>
 #include <thread>
 
@@ -177,43 +178,7 @@ class ArrayStack final
 		}
 };
 
-//Describes a stack frame.  User does not need directly, but is exposed to the user.
-struct StackFrame final
-{
-	void* return_address;
-	#ifdef _WIN32
-		std::string module, name, filename;
-		size_t line, line_offset;
-	#else
-		std::string function_identifier;
-	#endif
 
-	//check if matches `fnname`.  Note output may change after prettifying!
-	[[nodiscard]] bool matches_func( std::string_view fnname ) const noexcept;
-	//Replaces strings in `.name` and `.filename` to prettify output.  See macros discussion above.
-	void prettify_strings();
-	//Basic print function used by default.
-	void basic_print( FILE* file=stderr, size_t indent=4 ) const noexcept;
-};
-
-//Describes a stack trace.  User does not need directly, but is exposed to the user.  Constructing
-//	this class anywhere builds a stack trace to that location, which the user may find handy!
-struct StackTrace final
-{
-	std::thread::id thread_id;
-	std::deque<StackFrame> frames;
-
-	StackTrace() noexcept;
-	~StackTrace() noexcept;
-
-	//pop `count` number of stack frames
-	void pop( size_t count=1 ) noexcept
-	{
-		for ( size_t k=0; k<count; ++k ) frames.pop_front();
-	}
-	//Basic print function used by default.
-	void basic_print( FILE* file=stderr, size_t indent=4 ) const noexcept;
-};
 
 #ifdef TINYLEAKCHECK_ENABLED
 //Memory tracer.  User does not need directly.
@@ -249,14 +214,18 @@ struct MemoryTracer final
 			void* ptr;
 			size_t alignment, size;
 			std::thread::id thread_id;
-			StackTrace* trace;
+			std::stacktrace trace;
+		private:
+			bool mutable _finalized = false;
+			std::string mutable _str;
 
 		private:
 			BlockInfo( void* ptr, size_t alignment,size_t size, bool with_stacktrace ) noexcept;
-		public:
-			~BlockInfo() { delete trace; }
 
-			void basic_print( FILE* file=stderr, size_t indent=2 ) const noexcept;
+			[[nodiscard]] bool _finalize() const noexcept; //Returns whether block isn't ignored.
+
+		public:
+			void basic_print( FILE* file=stderr ) const noexcept;
 	};
 	//Map of pointers onto blocks.  User should not change, but is exposed to user.
 	std::map< void*, BlockInfo* > blocks;
@@ -264,8 +233,8 @@ struct MemoryTracer final
 	//Callbacks.  User may set to override defaults.
 	struct Callbacks
 	{
-		//Called by the default `.leaks_detected(...)`, for on each block.  The default prettifies
-		//	each frame if there is a stack track, then calls `.basic_print()` on the block.
+		//Called by the default `.leaks_detected(⋯)`, for each block.  The default prettifies each
+		//	frame if there is a stack track, then calls `.basic_print()` on the block.
 		using PrintBlock = void(*)( MemoryTracer const& tracer, BlockInfo const& block );
 		PrintBlock print_block;
 		
@@ -284,7 +253,7 @@ struct MemoryTracer final
 		PreDealloc pre_dealloc;
 
 		//Called if leaks are detected on program close.  The default prints a message, calls
-		//	`.print_block()` on all blocks, and fails (trapping into debugger in debug mode) and
+		//	`.print_block(⋯)` on all blocks, and fails (trapping into debugger in debug mode) and
 		//	then `std::abort()`s).
 		using LeaksDetected = void(*)( MemoryTracer const& tracer );
 		LeaksDetected leaks_detected;
@@ -305,9 +274,13 @@ struct MemoryTracer final
 extern MemoryTracer* memory_tracer;
 #endif
 
+
+
 //User needs to call in order to prevent the linker from eliding this module.  See also:
 //	https://www.nsnam.org/docs/linker-problems.pdf
 void prevent_linker_elison();
+
+
 
 }
 
