@@ -46,25 +46,33 @@ template<class TypeTo,class TypeFrom> inline static TypeTo bit_cast(TypeFrom con
 namespace TinyLeakCheck {
 
 #ifdef _WIN32
-inline static void* aligned_alloc(std::size_t alignment,std::size_t size) { return _aligned_malloc(size,alignment); }
-inline static void aligned_free(void* ptr) { _aligned_free(ptr); }
+inline static void* aligned_malloc(std::size_t alignment,std::size_t size) noexcept {
+	return _aligned_malloc(size,alignment);
+}
+inline static void aligned_free(void* ptr) noexcept {
+	_aligned_free(ptr);
+}
 #else
 //Note that for `std::aligned_alloc(...)`, the size is required to be a multiple of the alignment.
 //	We could manually pad it out:
 #if 0
-inline static void* aligned_alloc(std::size_t alignment,std::size_t size) {
+inline static void* aligned_malloc(std::size_t alignment,std::size_t size) noexcept {
 	size += ( alignment - size%alignment )%alignment;
-	return std::aligned_alloc(size,alignment);
+	return std::aligned_alloc(alignment,size);
 }
-inline static void aligned_free(void* ptr) { free(ptr); }
+inline static void aligned_free(void* ptr) noexcept { free(ptr); }
 #endif
-//	. . . however unfortunately apparently on some glibc-based platforms, there is a bug in certain
-//	versions that causes memory corruption.  I have validated this extensively and in any case other
-//	people have noticed this in other contexts since at least 2016---yet even on up-to-date systems
-//	the bug persists.  Simply amazing.  Instead, basically implement aligned malloc and free
-//	ourselves :V
+/*
+. . . however unfortunately apparently on some glibc-based platforms, there is a bug in certain
+versions that causes memory corruption.  I have validated this extensively and in any case other
+people have noticed this in other contexts since at least 2016---yet even on up-to-date systems
+the bug persists.  Simply amazing.  Instead, basically implement aligned malloc and free
+ourselves :V
+
+TODO: recheck.  In some documentations, `std::aligned_alloc(...)` had swapped arguments?
+*/
 using TypeOffset = uint16_t;
-inline static void* aligned_alloc(std::size_t alignment,std::size_t size) {
+inline static void* aligned_malloc(std::size_t alignment,std::size_t size) noexcept {
 	TINYLEAKCHECK_ASSERT(alignment<=std::numeric_limits<TypeOffset>::max(),"Alignment too large!  Use a smaller alignment or increase offset width.");
 
 	std::size_t count = alignment-1 + sizeof(TypeOffset) + size;
@@ -81,7 +89,7 @@ inline static void* aligned_alloc(std::size_t alignment,std::size_t size) {
 
 	return byteptr;
 }
-inline static void aligned_free(void* ptr) {
+inline static void aligned_free(void* ptr) noexcept {
 	uint8_t* byteptr = static_cast<uint8_t*>(ptr);
 
 	TypeOffset offset; memcpy(&offset,byteptr-sizeof(TypeOffset),sizeof(TypeOffset));
@@ -118,7 +126,15 @@ struct MutexWrapper final {
 	MutexWrapper() { MutexWrapper::ready=true; }
 };
 std::atomic_bool MutexWrapper::ready = false;
-MutexWrapper _stacktrace_mutex;
+#ifdef __clang__
+	#pragma clang diagnostic push
+	#pragma clang diagnostic ignored "-Wexit-time-destructors"
+	#pragma clang diagnostic ignored "-Wglobal-constructors"
+#endif
+static MutexWrapper _stacktrace_mutex;
+#ifdef __clang__
+	#pragma clang diagnostic pop
+#endif
 #endif
 
 bool StackFrame::matches_func(std::string const& funcname) const noexcept {
@@ -489,16 +505,24 @@ void MemoryTracer::BlockInfo::basic_print(FILE* file/*=stderr*/,size_t indent/*=
 	}
 }
 
+#ifdef __clang__
+	#pragma clang diagnostic push
+	#pragma clang diagnostic ignored "-Wexit-time-destructors"
+	#pragma clang diagnostic ignored "-Wglobal-constructors"
+#endif
 static std::recursive_mutex _memory_tracer_mutex;
-inline static void _default_callback_print_block(MemoryTracer const& /*memory_tracer*/,MemoryTracer::BlockInfo const& block) {
+#ifdef __clang__
+	#pragma clang diagnostic pop
+#endif
+inline static void _default_callback_print_block(MemoryTracer const& /*memory_tracer_lcl*/,MemoryTracer::BlockInfo const& block) {
 	block.basic_print();
 }
-inline static void _default_callback_post_alloc (MemoryTracer const& /*memory_tracer*/,void* /*ptr*/,size_t /*alignment*/,size_t /*size*/) {}
-inline static void _default_callback_pre_dealloc(MemoryTracer const& /*memory_tracer*/,void* /*ptr*/,size_t /*alignment*/                ) {}
-inline static void _default_callback_leaks_detected(MemoryTracer const& memory_tracer) {
+inline static void _default_callback_post_alloc (MemoryTracer const& /*memory_tracer_lcl*/,void* /*ptr*/,size_t /*alignment*/,size_t /*size*/) {}
+inline static void _default_callback_pre_dealloc(MemoryTracer const& /*memory_tracer_lcl*/,void* /*ptr*/,size_t /*alignment*/                ) {}
+[[noreturn]] inline static void _default_callback_leaks_detected(MemoryTracer const& memory_tracer_lcl) {
 	fprintf(stderr,"Leaks detected!\n");
-	for (auto const& iter : memory_tracer.blocks) {
-		memory_tracer.callbacks.print_block(memory_tracer,*iter.second);
+	for (auto const& iter : memory_tracer_lcl.blocks) {
+		memory_tracer_lcl.callbacks.print_block(memory_tracer_lcl,*iter.second);
 	}
 
 	/*
@@ -514,7 +538,14 @@ inline static void _default_callback_leaks_detected(MemoryTracer const& memory_t
 		#endif
 	#endif
 
+	#ifdef __clang__
+		#pragma clang diagnostic push
+		#pragma clang diagnostic ignored "-Wunreachable-code"
+	#endif
 	std::abort();
+	#ifdef __clang__
+		#pragma clang diagnostic pop
+	#endif
 }
 MemoryTracer::MemoryTracer() {
 	callbacks.print_block    = _default_callback_print_block   ;
@@ -619,12 +650,12 @@ are explicitly ignored.
 */
 MemoryTracer* memory_tracer = nullptr;
 static bool _ready = false;
-inline static void* _alloc  (          size_t alignment,size_t size) {
-	void* result = aligned_alloc( alignment, size );
+inline static void* _alloc  (size_t alignment,size_t size) {
+	void* result = aligned_malloc( alignment, size );
 	if (_ready) [[likely]] memory_tracer->record_alloc(result,alignment,size);
 	return result;
 }
-inline static void  _dealloc(void* ptr,size_t alignment            ) {
+inline static void  _dealloc(size_t alignment,void* ptr  ) {
 	if (_ready) [[likely]] memory_tracer->record_dealloc(ptr,alignment);
 	aligned_free(ptr);
 }
@@ -638,7 +669,15 @@ struct _EnsureMemoryTracer final {
 		delete memory_tracer; memory_tracer=nullptr;
 	}
 };
+#ifdef __clang__
+	#pragma clang diagnostic push
+	#pragma clang diagnostic ignored "-Wexit-time-destructors"
+	#pragma clang diagnostic ignored "-Wglobal-constructors"
+#endif
 static _EnsureMemoryTracer _ensure_memory_tracer;
+#ifdef __clang__
+	#pragma clang diagnostic pop
+#endif
 #endif
 
 void prevent_linker_elison() {}
@@ -655,10 +694,10 @@ void prevent_linker_elison() {}
 }
 
 void operator delete( void* ptr                             ) noexcept {
-	TinyLeakCheck::_dealloc(ptr,__STDCPP_DEFAULT_NEW_ALIGNMENT__);
+	TinyLeakCheck::_dealloc(__STDCPP_DEFAULT_NEW_ALIGNMENT__,ptr);
 }
 void operator delete( void* ptr, std::align_val_t alignment ) noexcept {
-	TinyLeakCheck::_dealloc(ptr,static_cast<size_t>(alignment)  );
+	TinyLeakCheck::_dealloc(static_cast<size_t>(alignment)  ,ptr);
 }
 
 #endif
