@@ -15,6 +15,7 @@
 	#include <execinfo.h>
 #endif
 
+#include <bit>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -29,11 +30,16 @@
 
 //Fix the `std::bit_cast<...>(...)` they don't actually have.  If you don't like me putting stuff in
 //	`std::`, then you should have implemented the functionality you were supposed to :)
-namespace std {
+namespace std
+{
 
-template<class TypeTo,class TypeFrom> inline static TypeTo bit_cast(TypeFrom const& from) noexcept {
-	static_assert(sizeof(TypeTo)==sizeof(TypeFrom),"Size mismatch!");
-	TypeTo result; memcpy(&result,&from,sizeof(TypeTo)); //Can't be `constexpr` :(
+template<class TypeTo,class TypeFrom> inline static
+TypeTo bit_cast( TypeFrom const& from ) noexcept
+{
+	static_assert( sizeof(TypeTo)==sizeof(TypeFrom), "Size mismatch!" );
+
+	TypeTo result;
+	memcpy( &result,&from, sizeof(TypeTo) ); //Can't be `constexpr` :(
 	return result;
 }
 
@@ -43,86 +49,125 @@ template<class TypeTo,class TypeFrom> inline static TypeTo bit_cast(TypeFrom con
 
 #endif
 
-namespace TinyLeakCheck {
+
+
+namespace TinyLeakCheck
+{
+
+
 
 #ifdef _WIN32
-inline static void* aligned_malloc(std::size_t alignment,std::size_t size) noexcept {
-	return _aligned_malloc(size,alignment);
+
+inline static void* aligned_malloc( std::size_t alignment,  std::size_t size) noexcept
+{
+	return _aligned_malloc( size, alignment );
 }
-inline static void aligned_free(void* ptr) noexcept {
+inline static void aligned_free( void* ptr ) noexcept
+{
 	_aligned_free(ptr);
 }
+
 #else
+
 //Note that for `std::aligned_alloc(...)`, the size is required to be a multiple of the alignment.
 //	We could manually pad it out:
 #if 0
-inline static void* aligned_malloc(std::size_t alignment,std::size_t size) noexcept {
+inline static void* aligned_malloc( std::size_t alignment, std::size_t size ) noexcept
+{
 	size += ( alignment - size%alignment )%alignment;
-	return std::aligned_alloc(alignment,size);
+	return std::aligned_alloc( alignment, size );
 }
-inline static void aligned_free(void* ptr) noexcept { free(ptr); }
+inline static void aligned_free( void* ptr ) noexcept { free(ptr); }
 #endif
 /*
 . . . however unfortunately apparently on some glibc-based platforms, there is a bug in certain
 versions that causes memory corruption.  I have validated this extensively and in any case other
-people have noticed this in other contexts since at least 2016---yet even on up-to-date systems
-the bug persists.  Simply amazing.  Instead, basically implement aligned malloc and free
-ourselves :V
+people have noticed this in other contexts since at least 2016---yet even on up-to-date systems the
+bug persists.  Simply amazing.  Instead, basically implement aligned malloc and free ourselves :V
 
 TODO: recheck.  In some documentations, `std::aligned_alloc(...)` had swapped arguments?
 */
 using TypeOffset = uint16_t;
-inline static void* aligned_malloc(std::size_t alignment,std::size_t size) noexcept {
-	TINYLEAKCHECK_ASSERT(alignment<=std::numeric_limits<TypeOffset>::max(),"Alignment too large!  Use a smaller alignment or increase offset width.");
+static void* aligned_malloc( std::size_t alignment, std::size_t size ) noexcept
+{
+	TINYLEAKCHECK_ASSERT(
+		alignment <= std::numeric_limits<TypeOffset>::max(),
+		"Alignment %zu too large!  Use a smaller alignment or increase offset width.",
+		alignment
+	);
 
 	std::size_t count = alignment-1 + sizeof(TypeOffset) + size;
-	uint8_t* byteptr = static_cast<uint8_t*>(malloc(count));
+	uint8_t* byteptr = static_cast<uint8_t*>( malloc(count) );
 
 	size_t offset = alignment - std::bit_cast<uintptr_t>(byteptr)%alignment;
-	if (offset<sizeof(TypeOffset)) offset+=alignment;
-	TINYLEAKCHECK_ASSERT(offset>=sizeof(TypeOffset)&&offset+size<=count,"Implementation error!");
+	if ( offset < sizeof(TypeOffset) ) offset += alignment;
+	TINYLEAKCHECK_ASSERT(
+		offset>=sizeof(TypeOffset) && offset+size<=count,
+		"Implementation error!"
+	);
 
 	byteptr += offset;
 
 	TypeOffset offsettmp = static_cast<TypeOffset>(offset);
-	memcpy(byteptr-sizeof(TypeOffset),&offsettmp,sizeof(TypeOffset));
+	memcpy( byteptr-sizeof(TypeOffset),&offsettmp, sizeof(TypeOffset) );
 
 	return byteptr;
 }
-inline static void aligned_free(void* ptr) noexcept {
+inline static void aligned_free( void* ptr ) noexcept
+{
 	uint8_t* byteptr = static_cast<uint8_t*>(ptr);
 
-	TypeOffset offset; memcpy(&offset,byteptr-sizeof(TypeOffset),sizeof(TypeOffset));
+	TypeOffset offset;
+	memcpy( &offset,byteptr-sizeof(TypeOffset), sizeof(TypeOffset) );
 
 	byteptr -= offset;
 
 	free(byteptr);
 }
+
 #endif
 
-static void str_replace( std::string* str_input, std::string_view const& str_to_find,std::string_view const& str_to_replace_with ) {
+
+
+static void str_replace(
+	std::string* str_input,
+	std::string_view str_to_find,
+	std::string_view str_to_replace_with
+) {
 	size_t len_find = str_to_find.length();
-	if (len_find==0) [[unlikely]] return;
+	if ( len_find == 0 ) [[unlikely]] return;
 
 	size_t len_repl = str_to_replace_with.length();
 
 	size_t pos = 0;
-	for (;(pos=str_input->find(str_to_find,pos))!=std::string::npos;) {
+	for ( ; (pos=str_input->find(str_to_find,pos))!=std::string::npos; )
+	{
 		str_input->replace( pos,len_find, str_to_replace_with );
 		pos += len_repl;
 	}
 }
-[[nodiscard]] inline static std::string str_get_replaced( std::string const& str_input, std::string_view const& str_to_find,std::string_view const& str_to_replace_with ) {
-	std::string tmp=str_input; str_replace( &tmp, str_to_find,str_to_replace_with ); return tmp;
+[[nodiscard]] inline static std::string str_get_replaced(
+	std::string_view str_input,
+	std::string_view str_to_find,
+	std::string_view str_to_replace_with
+) {
+	std::string tmp(str_input);
+	str_replace( &tmp, str_to_find,str_to_replace_with );
+	return tmp;
 }
-[[nodiscard]] inline static bool str_contains(std::string const& str,std::string const& other) noexcept {
+[[nodiscard]] inline static bool str_contains(
+	std::string_view str, std::string_view other
+) noexcept
+{
 	return str.find(other) != std::string::npos;
 }
 
 #ifdef _WIN32
-struct MutexWrapper final {
+struct MutexWrapper final
+{
 	std::mutex mutex;
 	static std::atomic_bool ready;
+
 	MutexWrapper() { MutexWrapper::ready=true; }
 };
 std::atomic_bool MutexWrapper::ready = false;
@@ -137,38 +182,41 @@ static MutexWrapper _stacktrace_mutex;
 #endif
 #endif
 
-bool StackFrame::matches_func(std::string const& funcname) const noexcept {
+[[nodiscard]] bool StackFrame::matches_func( std::string_view fnname ) const noexcept
+{
 	#ifdef _WIN32
-		return str_contains(name               ,funcname);
+		return str_contains( name               , fnname );
 	#else
-		return str_contains(function_identifier,funcname);
+		return str_contains( function_identifier, fnname );
 	#endif
 }
-void StackFrame::prettify_strings() {
+void StackFrame::prettify_strings()
+{
 	#ifdef TINYLEAKCHECK_ENABLED
 	memory_tracer->mode.record.push(false);
 	{
 	#endif
-		struct PrettifyReplacement final {
-			std::string find, replace;
-		} const replacements[] = TINYLEAKCHECK_PRETTIFY_STRS;
+		struct PrettifyReplacement final { std::string find, replace; };
+		PrettifyReplacement const replacements[] = TINYLEAKCHECK_PRETTIFY_STRS;
 
 		#ifdef _WIN32
 			std::string& target_str = name;
 			#else
 			std::string& target_str = function_identifier;
 			#endif
-			for (PrettifyReplacement const& replacement : replacements) {
+			for ( PrettifyReplacement const& replacement : replacements )
+			{
 				target_str = str_get_replaced( target_str, replacement.find,replacement.replace );
 			}
 
 			#ifdef _WIN32
 			std::string shortest_filename = filename;
-			for (char const* varname : TINYLEAKCHECK_PRETTIFY_ENVS) {
+			for ( char const* varname : TINYLEAKCHECK_PRETTIFY_ENVS )
+			{
 				char const* var = std::getenv(varname);
-				if (var==nullptr) continue;
-				std::string repl = str_get_replaced(filename,var,std::string("%")+varname+"%");
-				if (repl.length()<shortest_filename.length()) shortest_filename=repl;
+				if ( var == nullptr ) continue;
+				std::string repl = str_get_replaced( filename, var,std::string("%")+varname+"%" );
+				if ( repl.length() < shortest_filename.length() ) shortest_filename = repl;
 			}
 			filename = shortest_filename;
 		#else
@@ -179,33 +227,45 @@ void StackFrame::prettify_strings() {
 	memory_tracer->mode.record.pop();
 	#endif
 }
-void StackFrame::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const noexcept {
-	for (size_t i=0;i<indent;++i) fputc(' ',file);
+void StackFrame::basic_print( FILE* file/*=stderr*/, size_t indent/*=4*/ ) const noexcept
+{
+	for ( size_t k=0; k<indent; ++k ) fputc( ' ', file );
 	#ifdef _WIN32
-		fprintf(file,"%s!",module.c_str());
-		if (name!="") [[likely]] fprintf(file,"%s",name.c_str());
-		else                     fprintf(file,"0x%p",return_address);
-		if (filename!="") [[likely]] {
+		fprintf( file, "%s!", module.c_str() );
+		if ( !name.empty() ) [[likely]] fprintf( file, "%s", name.c_str() );
+		else                            fprintf( file, "0x%p", return_address );
+		if ( !filename.empty() ) [[likely]]
+		{
 			fprintf( file, " at %s(%zu,%zu)\n", filename.c_str(), line,line_offset );
-		} else {
+		}
+		else
+		{
 			fprintf( file, "\n" );
 		}
 	#else
-		fprintf(file,"%p: %s\n",return_address,function_identifier.c_str());
+		fprintf( file, "%p: %s\n", return_address, function_identifier.c_str() );
 	#endif
 }
 
+
+
 #ifdef _WIN32
 //Initializing and deinitializing the symbol walking is really slow.  Try to cache this per-process.
-struct StackTraceSymConfig final {
+struct StackTraceSymConfig final
+{
 	HANDLE const process;
 	size_t count;
-	explicit StackTraceSymConfig(HANDLE process) : process(process), count(0) {
+
+	explicit StackTraceSymConfig( HANDLE process ) : process(process), count(0)
+	{
 		//Initialize process symbol handler
 		#ifndef NDEBUG
-		{ BOOL ret=SymInitialize(process,nullptr,TRUE); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
+			{
+				BOOL ret = SymInitialize( process, nullptr, TRUE );
+				TINYLEAKCHECK_ASSERT( ret==TRUE, "Implementation error!" );
+			}
 		#else
-		           SymInitialize(process,nullptr,TRUE);
+			SymInitialize( process, nullptr, TRUE );
 		#endif
 
 		//Configure the symbol handler.  See also:
@@ -219,24 +279,29 @@ struct StackTraceSymConfig final {
 			SYMOPT_LOAD_LINES              //Load line numbers
 		);
 	}
-	~StackTraceSymConfig() noexcept {
+	~StackTraceSymConfig() noexcept
+	{
 		#ifndef NDEBUG
-			{ BOOL ret=SymCleanup(process); TINYLEAKCHECK_ASSERT(ret==TRUE,"Implementation error!"); }
+			{
+				BOOL ret = SymCleanup(process);
+				TINYLEAKCHECK_ASSERT( ret==TRUE, "Implementation error!" );
+			}
 		#else
-			           SymCleanup(process);
+			SymCleanup(process);
 		#endif
 	}
 };
-static std::map<HANDLE,StackTraceSymConfig*>* _sym_config = nullptr;
+static std::map< HANDLE, StackTraceSymConfig* >* _sym_config = nullptr;
 #endif
 StackTrace::StackTrace() noexcept :
-	thread_id(std::this_thread::get_id())
+	thread_id( std::this_thread::get_id() )
 {
-	auto create = [this]() noexcept -> void {
+	auto create = [this]() noexcept -> void
+	{
 		#ifdef TINYLEAKCHECK_ENABLED
 		/*
 		Can't do memory tracing here with a stack trace because the implementation of stack tracing
-		. . . allocates memory which will then requests a stack trace: an infinite recursion.  At
+		. . . allocates memory, which will then request a stack trace: an infinite recursion.  At
 		the same time, though, we *are* allocating memory, so we still need to record the
 		allocations so that the tracer won't be confused when this stack trace is later deallocated.
 		*/
@@ -270,7 +335,8 @@ StackTrace::StackTrace() noexcept :
 				//Preallocate
 				//	Symbol struct
 				constexpr size_t symbol_backing_num_bytes = sizeof(IMAGEHLP_SYMBOL64) + 255;
-				alignas(alignof(IMAGEHLP_SYMBOL64)) uint8_t symbol_buffer[symbol_backing_num_bytes] = {};
+				alignas( alignof(IMAGEHLP_SYMBOL64) )
+				uint8_t symbol_buffer[symbol_backing_num_bytes] = {};
 				PIMAGEHLP_SYMBOL64 symbol = reinterpret_cast<IMAGEHLP_SYMBOL64*>(symbol_buffer);
 				symbol->SizeOfStruct  = sizeof(IMAGEHLP_SYMBOL64);
 				symbol->MaxNameLength = symbol_backing_num_bytes - offsetof(IMAGEHLP_SYMBOL64,Name);
@@ -280,13 +346,19 @@ StackTrace::StackTrace() noexcept :
 				//Initialize and configure symbol handler.  This is a global cache (note this
 				//	function is protected by mutex), for performance.
 				{
-					std::map<HANDLE,StackTraceSymConfig*>::iterator iter;
-					if (!_sym_config) [[unlikely]] {
-						_sym_config = new std::map<HANDLE,StackTraceSymConfig*>;
-						ADD_CONFIG: iter=_sym_config->emplace( process, new StackTraceSymConfig(process) ).first;
-					} else {
+					std::map< HANDLE, StackTraceSymConfig* >::iterator iter;
+					if ( !_sym_config ) [[unlikely]]
+					{
+						_sym_config = new std::map< HANDLE, StackTraceSymConfig *>;
+						ADD_CONFIG:
+						iter = _sym_config->emplace(
+							process, new StackTraceSymConfig(process)
+						).first;
+					}
+					else
+					{
 						iter = _sym_config->find(process);
-						if (iter==_sym_config->cend()) [[unlikely]] goto ADD_CONFIG;
+						if ( iter == _sym_config->cend() ) [[unlikely]] goto ADD_CONFIG;
 					}
 					++iter->second->count;
 				}
@@ -294,7 +366,7 @@ StackTrace::StackTrace() noexcept :
 				//Read registers
 				CONTEXT frame_regs = {};
 				frame_regs.ContextFlags = CONTEXT_FULL;
-				RtlCaptureContext(&frame_regs);
+				RtlCaptureContext( &frame_regs );
 
 				//Construct the partial stack "frame" inside the current one.
 				STACKFRAME64 next_frame = {};
@@ -318,47 +390,62 @@ StackTrace::StackTrace() noexcept :
 
 				//Semantically, `StackWalk64(...)` gets the higher stack frame `next_frame` based on
 				//	`frame_regs`.
-				while (StackWalk64(
+				while ( StackWalk64(
 					machine_type,
 					process, thread,
 					&next_frame, &frame_regs,
 					nullptr, SymFunctionTableAccess, SymGetModuleBase, nullptr
-				)) {
+				) ) {
 					StackFrame f;
 
-					static_assert(sizeof(void*)==sizeof(DWORD64));
+					static_assert( sizeof(void*) == sizeof(DWORD64) );
 					f.return_address = std::bit_cast<void*>(next_frame.AddrPC.Offset);
 
 					DWORD64 module_base = SymGetModuleBase64( process, next_frame.AddrPC.Offset );
-					if (module_base!=0) [[likely]] {
+					if ( module_base != 0 ) [[likely]]
+					{
 						char filename_buffer[MAX_PATH];
-						static_assert(sizeof(HINSTANCE)==sizeof(HMODULE));
+						static_assert( sizeof(HINSTANCE) == sizeof(HMODULE) );
 						{
 							#ifndef NDEBUG
-								DWORD ret = GetModuleFileNameA( std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH );
-								TINYLEAKCHECK_ASSERT(ret>0,"Implementation error!");
+								DWORD ret = GetModuleFileNameA(
+									std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH
+								);
+								TINYLEAKCHECK_ASSERT( ret>0, "Implementation error!" );
 							#else
-								            GetModuleFileNameA( std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH );
+								GetModuleFileNameA(
+									std::bit_cast<HINSTANCE>(module_base), filename_buffer,MAX_PATH
+								);
 							#endif
 						}
 						std::string filename = filename_buffer;
 
-						size_t i = filename.find_last_of("\\/");
-						if (i!=std::string::npos) [[likely]] {
-							f.module = filename.substr(i+1);
-						} else {
+						size_t k = filename.find_last_of("\\/");
+						if ( k != std::string::npos ) [[likely]]
+						{
+							f.module = filename.substr( k + 1 );
+						}
+						else
+						{
 							f.module = filename;
 						}
-					} else {
+					}
+					else
+					{
 						//TODO: `GetLastError()` useful here?
 						//f.module = "(unknown module)";
 						SetLastError(0);
 					}
 
 					//Get symbol name
-					if (SymGetSymFromAddr64( process, next_frame.AddrPC.Offset, nullptr, symbol )==TRUE) [[likely]] {
+					if ( SymGetSymFromAddr64(
+						process, next_frame.AddrPC.Offset, nullptr, symbol
+					)==TRUE ) [[likely]]
+					{
 						f.name = symbol->Name;
-					} else {
+					}
+					else
+					{
 						//TODO: `GetLastError()` useful here?
 						//f.name = "(unknown function)";
 						SetLastError(0);
@@ -366,11 +453,16 @@ StackTrace::StackTrace() noexcept :
 
 					//Get symbol filename, line number, and line offset
 					DWORD line_offset = 0;
-					if (SymGetLineFromAddr64( process, next_frame.AddrPC.Offset, &line_offset, &line )==TRUE) [[likely]] {
+					if ( SymGetLineFromAddr64(
+						process, next_frame.AddrPC.Offset, &line_offset, &line
+					)==TRUE) [[likely]]
+					{
 						f.filename    = line.FileName;
 						f.line        = line.LineNumber;
 						f.line_offset = line_offset;
-					} else {
+					}
+					else
+					{
 						//TODO: `GetLastError()` useful here?
 						f.line        = 0;
 						f.line_offset = 0;
@@ -384,11 +476,15 @@ StackTrace::StackTrace() noexcept :
 		#else
 			//See also: https://www.gnu.org/software/libc/manual/html_node/Backtraces.html
 
-			std::vector<void*> return_addresses; return_addresses.resize(10);
+			std::vector<void*> return_addresses;
+			return_addresses.resize(10);
 			size_t num_frames;
 			LOOP:
-				num_frames = static_cast<size_t>(backtrace( return_addresses.data(), static_cast<int>(return_addresses.size()) ));
-				if (num_frames==return_addresses.size()) {
+				num_frames = static_cast<size_t>( backtrace(
+					return_addresses.data(), static_cast<int>(return_addresses.size())
+				) );
+				if ( num_frames == return_addresses.size() )
+				{
 					return_addresses.resize( return_addresses.size() * 2 );
 					goto LOOP;
 				}
@@ -399,16 +495,20 @@ StackTrace::StackTrace() noexcept :
 				return_addresses.data(),
 				static_cast<int>(return_addresses.size())
 			);
-			TINYLEAKCHECK_ASSERT(strings!=nullptr,"Could not get stack trace!");
-			struct FreeRAII final {
+			TINYLEAKCHECK_ASSERT( strings!=nullptr, "Could not get stack trace!" );
+			struct FreeRAII final
+			{
 				char**const ptr;
-				constexpr explicit FreeRAII(char** ptr) noexcept : ptr(ptr) {}
-				~FreeRAII() { free(ptr); }
-			} free_raii(strings);
 
-			for (size_t i=0;i<num_frames;++i) {
-				frames[i].return_address = return_addresses[i];
-				frames[i].function_identifier = strings[i];
+				constexpr explicit FreeRAII( char** ptr ) noexcept : ptr(ptr) {}
+				~FreeRAII() { free(ptr); }
+			};
+			FreeRAII free_raii(strings);
+
+			for ( size_t k=0; k<num_frames; ++k )
+			{
+				frames[k].return_address = return_addresses[k];
+				frames[k].function_identifier = strings[k];
 			}
 
 			//TODO: would be nice to have file information . . .
@@ -419,13 +519,16 @@ StackTrace::StackTrace() noexcept :
 		#endif
 	};
 	#ifdef _WIN32
-		if (_stacktrace_mutex.ready) {
+		if (_stacktrace_mutex.ready)
+		{
 			//We only allow creating a stack trace from a single thread at a time.  This is because
 			//	all "DbgHelp" calls are single-threaded only.
 			std::lock_guard lock(_stacktrace_mutex.mutex);
 
 			create();
-		} else {
+		}
+		else
+		{
 			//However, if the mutex has not been created yet, then we can't use it.  Fortunately,
 			//	this situation happens when we're in the static initialization phase, and so we're
 			//	single-threaded anyway.
@@ -439,38 +542,49 @@ StackTrace::StackTrace() noexcept :
 	//	caller.
 	pop(2);
 }
-StackTrace::~StackTrace() noexcept {
+StackTrace::~StackTrace() noexcept
+{
 	#ifdef _WIN32
 	std::lock_guard lock(_stacktrace_mutex.mutex);
 
-	TINYLEAKCHECK_ASSERT(_sym_config,"Implementation error!");
+	TINYLEAKCHECK_ASSERT( _sym_config, "Implementation error!" );
 
 	HANDLE process = GetCurrentProcess();
 	auto iter = _sym_config->find(process);
-	TINYLEAKCHECK_ASSERT(iter!=_sym_config->cend(),"Implementation error!");
+	TINYLEAKCHECK_ASSERT( iter!=_sym_config->cend(), "Implementation error!" );
 
-	TINYLEAKCHECK_ASSERT(iter->second->count>0,"Implementation error!");
+	TINYLEAKCHECK_ASSERT( iter->second->count>0, "Implementation error!" );
 	--iter->second->count;
-	if (iter->second->count==0) [[unlikely]] {
+	if ( iter->second->count == 0 ) [[unlikely]]
+	{
 		delete iter->second;
 		_sym_config->erase(iter);
-		if (_sym_config->empty()) [[unlikely]] {
-			delete _sym_config; _sym_config=nullptr;
+		if ( _sym_config->empty() ) [[unlikely]]
+		{
+			delete _sym_config;
+			_sym_config = nullptr;
 		}
 	}
 	#endif
 }
-void StackTrace::basic_print(FILE* file/*=stderr*/,size_t indent/*=4*/) const noexcept {
-	for (auto const& frame : frames) {
+void StackTrace::basic_print( FILE* file/*=stderr*/,size_t indent/*=4*/ ) const noexcept
+{
+	for ( auto const& frame : frames )
+	{
 		frame.basic_print(file,indent);
 	}
 }
 
+
+
 #ifdef TINYLEAKCHECK_ENABLED
-MemoryTracer::BlockInfo::BlockInfo( void* ptr, size_t alignment,size_t size, bool with_stacktrace ) noexcept :
+MemoryTracer::BlockInfo::BlockInfo(
+	void* ptr, size_t alignment,size_t size, bool with_stacktrace
+) noexcept :
 	ptr(ptr), alignment(alignment),size(size), thread_id(std::this_thread::get_id())
 {
-	if (with_stacktrace) [[likely]] {
+	if (with_stacktrace) [[likely]]
+	{
 		trace = new StackTrace;
 		/*
 		We need to pop four times to get to the call site where the memory was allocated:
@@ -480,30 +594,43 @@ MemoryTracer::BlockInfo::BlockInfo( void* ptr, size_t alignment,size_t size, boo
 			operator new(...) / operator new[](...)
 		*/
 		trace->pop(4);
-	} else {
+	}
+	else
+	{
 		//Stack trace was not requested.  This massively improves performance and is actually
 		//	necessary e.g. when generating the stack trace itself (we'd get infinite recursion).
 		trace = nullptr;
 	}
 }
-void MemoryTracer::BlockInfo::basic_print(FILE* file/*=stderr*/,size_t indent/*=2*/) const noexcept {
-	for (size_t i=0;i<indent;++i) fputc(' ',file);
-	fputs("Leaked ",file);
-	#ifdef _WIN32
-	fprintf(file,"0x%p",ptr);
-	#else
-	fprintf(file,"%p"  ,ptr);
-	#endif
-	std::stringstream ss; ss<<thread_id; std::string thread_id_str=ss.str();
-	fprintf(file," ( align %zu, size %zu, thread %s )",alignment,size,thread_id_str.c_str());
 
-	if (trace!=nullptr) [[likely]] {
-		fprintf(file," allocated at:\n");
-		trace->basic_print(file,indent+2);
-	} else {
-		fprintf(file,"\n");
+void MemoryTracer::BlockInfo::basic_print(
+	FILE* file/*=stderr*/, size_t indent/*=2*/
+) const noexcept
+{
+	for (size_t k=0; k<indent; ++k ) fputc( ' ', file );
+	fputs( "Leaked ", file );
+	#ifdef _WIN32
+	fprintf( file, "0x%p", ptr );
+	#else
+	fprintf( file, "%p"  , ptr );
+	#endif
+	std::stringstream ss;
+	ss << thread_id;
+	std::string thread_id_str = ss.str();
+	fprintf( file, " ( align %zu, size %zu, thread %s )", alignment, size, thread_id_str.c_str() );
+
+	if ( trace != nullptr ) [[likely]]
+	{
+		fprintf( file, " allocated at:\n" );
+		trace->basic_print( file, indent+2 );
+	}
+	else
+	{
+		fprintf( file, "\n" );
 	}
 }
+
+
 
 #ifdef __clang__
 	#pragma clang diagnostic push
@@ -514,15 +641,23 @@ static std::recursive_mutex _memory_tracer_mutex;
 #ifdef __clang__
 	#pragma clang diagnostic pop
 #endif
-inline static void _default_callback_print_block(MemoryTracer const& /*memory_tracer_lcl*/,MemoryTracer::BlockInfo const& block) {
+static void _default_callback_print_block(
+	MemoryTracer const& /*tracer*/, MemoryTracer::BlockInfo const& block
+) {
 	block.basic_print();
 }
-inline static void _default_callback_post_alloc (MemoryTracer const& /*memory_tracer_lcl*/,void* /*ptr*/,size_t /*alignment*/,size_t /*size*/) {}
-inline static void _default_callback_pre_dealloc(MemoryTracer const& /*memory_tracer_lcl*/,void* /*ptr*/,size_t /*alignment*/                ) {}
-[[noreturn]] inline static void _default_callback_leaks_detected(MemoryTracer const& memory_tracer_lcl) {
-	fprintf(stderr,"Leaks detected!\n");
-	for (auto const& iter : memory_tracer_lcl.blocks) {
-		memory_tracer_lcl.callbacks.print_block(memory_tracer_lcl,*iter.second);
+static void _default_callback_post_alloc (
+	MemoryTracer const& /*tracer*/, void* /*ptr*/, size_t /*alignment*/, size_t /*size*/
+) {}
+static void _default_callback_pre_dealloc(
+	MemoryTracer const& /*tracer*/, void* /*ptr*/, size_t /*alignment*/                 
+) {}
+[[noreturn]] static void _default_callback_leaks_detected( MemoryTracer const& tracer )
+{
+	fprintf( stderr, "Leaks detected!\n" );
+	for ( auto const& iter : tracer.blocks )
+	{
+		tracer.callbacks.print_block( tracer, *iter.second );
 	}
 
 	/*
@@ -547,78 +682,91 @@ inline static void _default_callback_pre_dealloc(MemoryTracer const& /*memory_tr
 		#pragma clang diagnostic pop
 	#endif
 }
-MemoryTracer::MemoryTracer() {
+
+MemoryTracer::MemoryTracer()
+{
 	callbacks.print_block    = _default_callback_print_block   ;
 	callbacks.post_alloc     = _default_callback_post_alloc    ;
 	callbacks.pre_dealloc    = _default_callback_pre_dealloc   ;
 	callbacks.leaks_detected = _default_callback_leaks_detected;
 }
-MemoryTracer::~MemoryTracer() {
-	if (!blocks.empty()) [[unlikely]] {
-		//Prettify strings and process ignores
-		std::string const ignore_funcs[] = TINYLEAKCHECK_IGNORE_FUNCS;
-		for ( auto iter=blocks.begin(); iter!=blocks.end(); ) {
-			BlockInfo* block = iter->second;
-			if (block->trace!=nullptr) {
-				for (StackFrame& frame : block->trace->frames) {
-					frame.prettify_strings();
+MemoryTracer::~MemoryTracer()
+{
+	if ( blocks.empty() ) [[likely]] return;
 
-					for (std::string const& ignore_func : ignore_funcs) {
-						if (frame.matches_func(ignore_func)) [[unlikely]] {
-							delete block;
-							auto iter_old = iter++;
-							blocks.erase(iter_old);
-							goto NEXT_BLOCK;
-						}
-					}
+	//Prettify strings and process ignores
+	std::string const ignore_funcs[] = TINYLEAKCHECK_IGNORE_FUNCS;
+	for ( auto iter=blocks.begin(); iter!=blocks.end(); )
+	{
+		BlockInfo* block = iter->second;
+		if ( block->trace != nullptr )
+		{
+			for ( StackFrame& frame : block->trace->frames )
+			{
+				frame.prettify_strings();
+
+				for ( std::string const& ignore_func : ignore_funcs )
+				{
+					if ( !frame.matches_func(ignore_func) ) [[likely]] continue;
+
+					delete block;
+					auto iter_old = iter++;
+					blocks.erase(iter_old);
+					goto NEXT_BLOCK;
 				}
 			}
-			++iter;
-			NEXT_BLOCK:;
 		}
-
-		//If there are still blocks, then memory leak!
-		if (!blocks.empty()) [[unlikely]] {
-			callbacks.leaks_detected(*this);
-
-			for (auto const& iter : blocks) {
-				delete iter.second;
-			}
-			//blocks.clear();
-		}
+		++iter;
+		NEXT_BLOCK:;
 	}
+
+	if ( blocks.empty() ) [[likely]] return;
+	//If there are still blocks, then memory leak!
+
+	callbacks.leaks_detected(*this);
+
+	for ( auto const& iter : blocks ) delete iter.second;
+	//blocks.clear();
 }
-void MemoryTracer::record_alloc  (void* ptr,size_t alignment,size_t size) {
+
+void MemoryTracer::record_alloc  ( void* ptr, size_t alignment, size_t size )
+{
 	std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
 
-	if (mode.record.peek()) {
-		mode.record.push(false);
+	if ( !mode.record.peek() ) return;
 
-		blocks.emplace( ptr, new BlockInfo(ptr,alignment,size,mode.with_stacktrace.peek()) );
+	mode.record.push(false);
 
-		callbacks.post_alloc(*this,ptr,alignment,size);
+	blocks.emplace(
+		ptr,
+		new BlockInfo( ptr, alignment, size, mode.with_stacktrace.peek() )
+	);
 
-		mode.record.pop();
-	}
+	callbacks.post_alloc( *this, ptr, alignment, size );
+
+	mode.record.pop();
 }
-void MemoryTracer::record_dealloc(void* ptr,size_t alignment            ) {
-	if (ptr==nullptr) return;
+void MemoryTracer::record_dealloc( void* ptr, size_t alignment              )
+{
+	if ( ptr == nullptr ) return;
 
 	std::lock_guard<std::recursive_mutex> lock_raii(_memory_tracer_mutex);
 
-	if (mode.record.peek()) {
-		mode.record.push(false);
+	if ( !mode.record.peek() ) return;
 
-		callbacks.pre_dealloc(*this,ptr,alignment);
+	mode.record.push(false);
 
-		auto iter = blocks.find(ptr);
-		TINYLEAKCHECK_ASSERT(iter!=blocks.cend(),"Deleting an invalid pointer 0x%p!",ptr);
-		delete iter->second;
-		blocks.erase(iter);
+	callbacks.pre_dealloc( *this, ptr, alignment );
 
-		mode.record.pop();
-	}
+	auto iter = blocks.find(ptr);
+	TINYLEAKCHECK_ASSERT( iter!=blocks.cend(), "Deleting an invalid pointer 0x%p!", ptr );
+	delete iter->second;
+	blocks.erase(iter);
+
+	mode.record.pop();
 }
+
+
 
 /*
 When a `MemoryTracer` exists, it can record allocations, and when it's deleted it can report the
@@ -650,23 +798,29 @@ are explicitly ignored.
 */
 MemoryTracer* memory_tracer = nullptr;
 static bool _ready = false;
-inline static void* _alloc  (size_t alignment,size_t size) {
+inline static void* _alloc  ( size_t alignment, size_t size )
+{
 	void* result = aligned_malloc( alignment, size );
-	if (_ready) [[likely]] memory_tracer->record_alloc(result,alignment,size);
+	if (_ready) [[likely]] memory_tracer->record_alloc( result, alignment, size );
 	return result;
 }
-inline static void  _dealloc(size_t alignment,void* ptr  ) {
-	if (_ready) [[likely]] memory_tracer->record_dealloc(ptr,alignment);
+inline static void  _dealloc( size_t alignment, void* ptr   )
+{
+	if (_ready) [[likely]] memory_tracer->record_dealloc( ptr, alignment );
 	aligned_free(ptr);
 }
-struct _EnsureMemoryTracer final {
-	_EnsureMemoryTracer() {
+struct _EnsureMemoryTracer final
+{
+	_EnsureMemoryTracer()
+	{
 		memory_tracer = new MemoryTracer;
 		_ready = true;
 	}
-	~_EnsureMemoryTracer() noexcept {
+	~_EnsureMemoryTracer() noexcept
+	{
 		_ready = false;
-		delete memory_tracer; memory_tracer=nullptr;
+		delete memory_tracer;
+		memory_tracer = nullptr;
 	}
 };
 #ifdef __clang__
@@ -686,18 +840,22 @@ void prevent_linker_elison() {}
 
 #ifdef TINYLEAKCHECK_ENABLED
 
-[[nodiscard]] void* operator new( std::size_t size                             ) {
-	return TinyLeakCheck::_alloc(__STDCPP_DEFAULT_NEW_ALIGNMENT__,size);
+[[nodiscard]] void* operator new( std::size_t size                             )
+{
+	return TinyLeakCheck::_alloc( __STDCPP_DEFAULT_NEW_ALIGNMENT__, size );
 }
-[[nodiscard]] void* operator new( std::size_t size, std::align_val_t alignment ) {
-	return TinyLeakCheck::_alloc(static_cast<size_t>(alignment)  ,size);
+[[nodiscard]] void* operator new( std::size_t size, std::align_val_t alignment )
+{
+	return TinyLeakCheck::_alloc( static_cast<size_t>(alignment)  , size );
 }
 
-void operator delete( void* ptr                             ) noexcept {
-	TinyLeakCheck::_dealloc(__STDCPP_DEFAULT_NEW_ALIGNMENT__,ptr);
+void operator delete( void* ptr                             ) noexcept
+{
+	TinyLeakCheck::_dealloc( __STDCPP_DEFAULT_NEW_ALIGNMENT__, ptr );
 }
-void operator delete( void* ptr, std::align_val_t alignment ) noexcept {
-	TinyLeakCheck::_dealloc(static_cast<size_t>(alignment)  ,ptr);
+void operator delete( void* ptr, std::align_val_t alignment ) noexcept
+{
+	TinyLeakCheck::_dealloc( static_cast<size_t>(alignment)  , ptr );
 }
 
 #endif

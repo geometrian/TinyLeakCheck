@@ -7,27 +7,33 @@
 	#include <Windows.h>
 #endif
 
+
+
 //Static leak!  Not detectable on some C++-spec-violating platforms.
 //	BTW it is bad practice to dynamically allocate static memory.  Try to avoid.
 std::string str;
 
-inline static void function_C() {
+static void function_C()
+{
 	//Memory leak!  This pointer should have been captured and `delete`d.
 	new int;
 }
 
-inline static void function_B() {
+static void function_B()
+{
 	function_C();
 
 	//Memory leak!  This pointer should have been captured and `delete`d.
 	new char;
 }
 
-inline static void function_A() {
+static void function_A()
+{
 	function_B();
 }
 
-int main(int,char*[]) {
+int main( int /*argc*/, char* /*argv*/[] )
+{
 	TinyLeakCheck::prevent_linker_elison();
 
 	#ifdef _WIN32
@@ -39,8 +45,8 @@ int main(int,char*[]) {
 		size_t res[2]={ 185,40 }, scrolls=200;
 		COORD      arg_buffer_size = {       (SHORT)(res[0]  ), (SHORT)(res[1]+scrolls) };
 		SMALL_RECT arg_window_rect = { 0, 0, (SHORT)(res[0]-1), (SHORT)(res[1]-1      ) };
-		SetConsoleScreenBufferSize(handle,arg_buffer_size);
-		SetConsoleWindowInfo(handle,TRUE,&arg_window_rect);
+		SetConsoleScreenBufferSize( handle, arg_buffer_size );
+		SetConsoleWindowInfo( handle, TRUE, &arg_window_rect );
 	#endif
 
 	function_A();

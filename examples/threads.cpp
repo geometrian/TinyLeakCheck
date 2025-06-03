@@ -2,24 +2,31 @@
 #include <thread>
 #include <tinyleakcheck/tinyleakcheck.hpp>
 
-inline static void main_thread1() {
+
+
+static void main_thread1()
+{
 	//Leaking 5 * sizeof(int16_t) = 10 bytes from child thread 1.
-	for (unsigned i=0u;i<5u;++i) {
+	for ( unsigned k=0u; k<5u; ++k )
+	{
 		printf("Child thread 1 is leaking . . .\n");
 		new int16_t;
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		std::this_thread::sleep_for( std::chrono::milliseconds(10) );
 	}
 }
-inline static void main_thread2() {
+static void main_thread2()
+{
 	//Leaking 5 * sizeof(int32_t) = 20 bytes from child thread 2.
-	for (unsigned i=0u;i<5u;++i) {
+	for ( unsigned k=0u; k<5u; ++k )
+	{
 		printf("Child thread 2 is leaking . . .\n");
 		new int32_t;
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		std::this_thread::sleep_for( std::chrono::milliseconds(10) );
 	}
 }
 
-int main(int,char*[]) {
+int main( int /*argc*/, char* /*argv*/[] )
+{
 	TinyLeakCheck::prevent_linker_elison();
 
 	//Leaking 1 * sizeof(int8_t) = 1 byte from main thread.
