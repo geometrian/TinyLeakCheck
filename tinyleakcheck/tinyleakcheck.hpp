@@ -130,7 +130,7 @@ class ArrayStack final {
 		[[nodiscard]] constexpr T const& peek() const noexcept { TINYLEAKCHECK_ASSERT(_count>0,"Stack contains no elements!"); return _backing[_count-1]; }
 		T      & operator[](std::size_t index)       noexcept { TINYLEAKCHECK_ASSERT(index<_count,"Index %zu out of bound!",index); return _backing[(_count-1)-index]; }
 		T const& operator[](std::size_t index) const noexcept { TINYLEAKCHECK_ASSERT(index<_count,"Index %zu out of bound!",index); return _backing[(_count-1)-index]; }
-		void clear() const noexcept { _count=0; }
+		void clear() noexcept { _count=0; }
 		void push(T const& val) noexcept { TINYLEAKCHECK_ASSERT(_count<maxN,"Stack overflow!" ); _backing[_count++]=val;    }
 		T    pop (            ) noexcept { TINYLEAKCHECK_ASSERT(_count>0   ,"Stack underflow!"); return _backing[--_count]; }
 		[[nodiscard]] constexpr bool        empty() const noexcept { return _count==0; }
